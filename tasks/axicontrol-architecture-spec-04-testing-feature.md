@@ -1,7 +1,7 @@
 ---
 name: axicontrol-architecture-spec-04-testing-feature
 description: What 'testing the axidraw' means as an app feature and how it's exposed
-lane: backlog
+lane: todo
 tags: wayfinder:grilling
 created-at: "2026-07-31"
 created-by: seanmullen

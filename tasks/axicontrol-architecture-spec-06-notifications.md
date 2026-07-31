@@ -1,7 +1,7 @@
 ---
 name: axicontrol-architecture-spec-06-notifications
 description: What transport notifies a user when a plot completes, fails, or pauses
-lane: backlog
+lane: todo
 tags: wayfinder:grilling
 created-at: "2026-07-31"
 created-by: seanmullen

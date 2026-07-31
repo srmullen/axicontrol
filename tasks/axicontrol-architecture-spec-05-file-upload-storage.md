@@ -1,7 +1,7 @@
 ---
 name: axicontrol-architecture-spec-05-file-upload-storage
 description: How plot files are uploaded, stored, and retained
-lane: backlog
+lane: todo
 tags: wayfinder:grilling
 created-at: "2026-07-31"
 created-by: seanmullen

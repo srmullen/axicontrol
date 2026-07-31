@@ -1,7 +1,7 @@
 ---
 name: axicontrol-architecture-spec-03-configuration-model
 description: How AxiDraw CLI configuration options are modeled and stored
-lane: backlog
+lane: todo
 tags: wayfinder:grilling
 created-at: "2026-07-31"
 created-by: seanmullen

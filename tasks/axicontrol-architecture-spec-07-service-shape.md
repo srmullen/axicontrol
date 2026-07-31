@@ -1,7 +1,7 @@
 ---
 name: axicontrol-architecture-spec-07-service-shape
 description: Whether axicontrol is one backend or split into a device controller plus a web API
-lane: backlog
+lane: todo
 tags: wayfinder:grilling
 created-at: "2026-07-31"
 created-by: seanmullen

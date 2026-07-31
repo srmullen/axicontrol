@@ -1,7 +1,7 @@
 ---
 name: axicontrol-architecture-spec
 description: System-level architecture spec for axicontrol, ready to hand off for implementation
-lane: backlog
+lane: in-progress
 tags: wayfinder:map
 created-at: "2026-07-31"
 created-by: seanmullen
@@ -18,6 +18,8 @@ A system-level architecture spec for axicontrol: the data model, services, and A
 - Default ticket type is `grilling`; use `research` for external lookups (k8s device-access patterns, AxiDraw CLI capabilities) and `prototype` only if a concrete artifact is needed to react to.
 
 ## Decisions so far
+
+- [Device access](./axicontrol-architecture-spec-01-device-access.md) — single AxiDraw, fixed node; node-pinned pod reaches it via a udev-stabilized `hostPath` device mount, and owns all job state since the CLI itself is stateless per invocation.
 
 ## Not yet specified
 

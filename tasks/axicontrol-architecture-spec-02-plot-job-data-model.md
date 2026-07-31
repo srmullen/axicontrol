@@ -1,7 +1,7 @@
 ---
 name: axicontrol-architecture-spec-02-plot-job-data-model
 description: 'Data model for a plot job: states, and how AxiDraw layers relate to a job'
-lane: backlog
+lane: todo
 tags: wayfinder:grilling
 created-at: "2026-07-31"
 created-by: seanmullen
