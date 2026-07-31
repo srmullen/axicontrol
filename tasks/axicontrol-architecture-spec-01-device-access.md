@@ -29,3 +29,5 @@ The cluster is multi-node, and there's a single AxiDraw unit permanently attache
 ### Consequence
 
 Whatever component talks to the AxiDraw CLI must run inside this node-pinned pod — that constrains the answer to [service shape](./axicontrol-architecture-spec-07-service-shape.md) ("Whether axicontrol is one backend or split into a device controller plus a web API"), which is now unblocked.
+
+**Addendum (from [plot job data model](./axicontrol-architecture-spec-02-plot-job-data-model.md)):** "stateless" above means no persistent daemon or in-memory state between CLI invocations — pause/resume does have state, but it's file-based: `axicli` checkpoints progress into its output SVG (`-o`), and a later `res_plot`/`res_home` invocation resumes from that file. See [checkpoint file persistence](./axicontrol-architecture-spec-08-checkpoint-persistence.md) for where those files live.

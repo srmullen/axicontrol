@@ -20,6 +20,7 @@ A system-level architecture spec for axicontrol: the data model, services, and A
 ## Decisions so far
 
 - [Device access](./axicontrol-architecture-spec-01-device-access.md) — single AxiDraw, fixed node; node-pinned pod reaches it via a udev-stabilized `hostPath` device mount, and owns all job state since the CLI itself is stateless per invocation.
+- [Plot job data model](./axicontrol-architecture-spec-02-plot-job-data-model.md) — a Job has an ordered list of Passes (one CLI invocation each; `whole` jobs have 1, `layers` jobs have one per auto-discovered layer number), each independently paused (SIGINT + checkpoint file) and resumed (`res_plot`/`res_home`); advancing to the next Pass always requires an explicit user trigger.
 
 ## Not yet specified
 
