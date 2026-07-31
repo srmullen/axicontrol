@@ -24,10 +24,11 @@ A system-level architecture spec for axicontrol: the data model, services, and A
 - [Configuration model](./axicontrol-architecture-spec-03-configuration-model.md) — a singleton Device Config (hardware-fixed values) plus named, reusable Presets (plot-affecting values); a Pass references one Preset with optional per-Pass overrides layered on top; uploaded SVGs are sanitized to strip embedded option overrides so the Preset stays the sole source of truth.
 - [Testing feature](./axicontrol-architecture-spec-04-testing-feature.md) — two features: a hardware self-test/jog panel (connectivity, pen cycle, alignment, home, move-to-coordinate via axicontrol's own in-memory position tracking since the CLI has none), and a per-file plot dry-run via the CLI's `preview`/`report_time` options layered onto the existing Job/Pass/Preset machinery.
 - [File upload & storage](./axicontrol-architecture-spec-05-file-upload-storage.md) — SVG only (a CLI constraint, not a choice); a `FileStore` abstraction backed initially by a PersistentVolume on the device node, swappable later; uploaded SVGs are sanitized on receipt and retained indefinitely as a personal design library. The same `FileStore` will back Pass checkpoint files too.
+- [Notifications](./axicontrol-architecture-spec-06-notifications.md) — a generic outbound webhook (POSTs to user-configured URLs) fires on Job `complete`, Pass `failed`, and Job `awaiting-next-pass`; a separate SSE stream carries live Job/Pass state to connected clients. Both emitted from the node-pinned pod, which already owns the state transitions.
 
 ## Not yet specified
 
-- How "view the file that will be plotted" resolves at the system level (raw file serving vs. server-side preview rendering) — depends on the service-shape and file-storage decisions below.
+- How "view the file that will be plotted" resolves at the system level (raw file serving vs. server-side preview rendering) — the file-storage half is now settled (`FileStore`/PersistentVolume); what's left depends only on the still-open service-shape decision below.
 
 ## Out of scope
 
