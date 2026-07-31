@@ -1,0 +1,18 @@
+# Taipir configuration
+
+# Directory containing task markdown files (relative to project root)
+tasks_dir = "tasks"
+
+# Path to the SQLite index database (relative to project root)
+db_path = ".taipir/index.db"
+
+# Ordered list of board lanes. Order defines workflow progression
+# (first = earliest stage, last = most complete).
+lanes = [
+    "backlog",
+    "todo",
+    "in-progress",
+    "review",
+    "done",
+    "cancelled",
+]
