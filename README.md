@@ -6,7 +6,7 @@ Axicontrol is a web interface to control an AxiDraw penplotter. It will use the 
 ## Requirements
 
 - Use the axidraw cli
-- Print, Pause, and Result plots and plot layers.
+- Print, Pause, and Resume plots and plot layers.
 - View the file that will be plotted.
 - Manage the plot configuration
 - Notifications when a plot completes
