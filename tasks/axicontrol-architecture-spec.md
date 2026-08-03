@@ -1,7 +1,7 @@
 ---
 name: axicontrol-architecture-spec
 description: System-level architecture spec for axicontrol, ready to hand off for implementation
-lane: in-progress
+lane: done
 tags: wayfinder:map
 created-at: "2026-07-31"
 created-by: seanmullen
@@ -28,6 +28,7 @@ A system-level architecture spec for axicontrol: the data model, services, and A
 - [Service shape](./axicontrol-architecture-spec-07-service-shape.md) — single backend service: the node-pinned pod serves the entire HTTP API directly, no separate web-API/device-controller split. Every prior decision already required that pod for its core operation, so a split would add a network boundary for no benefit at this scale.
 - [Checkpoint persistence](./axicontrol-architecture-spec-08-checkpoint-persistence.md) — checkpoints share the `FileStore` with uploads (per file-upload-storage) but diverge in two narrow ways: keyed under their own `checkpoints/<pass-id>.svg` namespace (one stable key per Pass, overwritten in place on every pause — confirmed supported by the AxiDraw CLI), and deleted once their Pass reaches a terminal state rather than retained indefinitely like uploads.
 - [Primary datastore](./axicontrol-architecture-spec-09-primary-datastore.md) — embedded SQLite, not a separate database service, since exactly one process (the node-pinned pod) ever touches this data; the SQLite file shares the `FileStore`'s PersistentVolume at its own subpath rather than getting a second PV.
+- [SVG preview safety](./axicontrol-architecture-spec-10-svg-preview-safety.md) — both sanitization and a restricted rendering context: the existing upload-time sanitization pass strips `<script>`/event-handler content too, and the browser preview renders via an `<img>` tag (browsers' built-in strictest SVG security context) rather than a custom CSP/sandbox scheme.
 
 ## Not yet specified
 
