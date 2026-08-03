@@ -10,7 +10,7 @@ depends-on: axicontrol-backend-skeleton
 
 ## Parent
 
-Derived from the [axicontrol-architecture-spec](./axicontrol-architecture-spec.md) map. See [ADR-0003](../docs/adr/0003-device-config-and-presets.md) (Device Config & Presets).
+Derived from the [axicontrol-architecture-spec](./axicontrol-architecture-spec.md) map. See [ADR-0003](../docs/adr/0003-device-config-and-presets.md) (Device Config & Presets) and [ADR-0012](../docs/adr/0012-frontend-stack.md) (htmx forms for management UI).
 
 ## What to build
 
@@ -19,6 +19,7 @@ CRUD for the two configuration concepts that later feed plot jobs: a singleton D
 - Device Config: singleton record for hardware-fixed values (`model`, `penlift`). Get/update endpoints — there's exactly one, no create/delete.
 - Preset: named, reusable records holding the plot-affecting values (`speed_pendown`, `speed_penup`, `accel`, `pen_pos_down`, `pen_pos_up`, `pen_rate_lower`, `pen_rate_raise`, `pen_delay_down`, `pen_delay_up`, `const_speed`, etc.), plus a `name` and description. Full CRUD.
 - Persisted in the embedded SQLite from axicontrol-backend-skeleton.
+- Management UI: `html/template` pages with htmx-submitted forms for editing Device Config and creating/editing/deleting Presets — no full page reloads.
 - No plotting happens yet — this ticket is configuration data management only, consumed later by axicontrol-print-whole-job.
 
 ## Acceptance criteria

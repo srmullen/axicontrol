@@ -10,7 +10,7 @@ depends-on: axicontrol-backend-skeleton,axicontrol-print-whole-job
 
 ## Parent
 
-Derived from the [axicontrol-architecture-spec](./axicontrol-architecture-spec.md) map. See [ADR-0004](../docs/adr/0004-carriage-position-tracking.md) (carriage position tracking).
+Derived from the [axicontrol-architecture-spec](./axicontrol-architecture-spec.md) map. See [ADR-0004](../docs/adr/0004-carriage-position-tracking.md) (carriage position tracking) and [ADR-0012](../docs/adr/0012-frontend-stack.md) (htmx jog panel UI).
 
 ## What to build
 
@@ -22,6 +22,7 @@ Two related but independent testing capabilities:
 - Manual alignment via `align`.
 - Home via `walk_home`.
 - Move-to-coordinate: axicontrol tracks carriage position in memory, zeroed on `walk_home` or motor-enable, translating a "go to (x, y)" request into relative `walk_x`/`walk_y` deltas. Explicitly not persisted — a pod restart loses it until the next home.
+- All jog panel controls are htmx forms/buttons on an `html/template` page, posting to the corresponding endpoints without a full page reload.
 
 **Plot dry-run** (per uploaded file, reuses Job/Pass/Preset from axicontrol-print-whole-job):
 - Adds `preview` (+ `report_time`) to a Pass's resolved config, simulating geometry/timing without lowering the pen or moving the device for real.

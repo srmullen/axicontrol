@@ -21,6 +21,7 @@ Pause and resume a running Pass, end to end, on the real device.
 - Resume: pod re-invokes `axicli` with `res_plot`/`res_home` against that same checkpoint key. Pass → `running`.
 - Checkpoint retention: delete `checkpoints/<pass-id>.svg` as soon as the Pass reaches a terminal state (`complete`/`failed`/`cancelled`); delete-if-exists, since a `failed` Pass may not have left one.
 - Cancel: from `pending`/`paused`/`running`, Pass and Job → `cancelled` (terminal).
+- Pause/resume/cancel are htmx-triggered POSTs from the Job status page ([ADR-0012](../docs/adr/0012-frontend-stack.md)) — no full page reload, state reflects via the same page's SSE-driven updates ([axicontrol-notifications](./axicontrol-notifications.md)).
 
 ## Acceptance criteria
 

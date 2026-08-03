@@ -10,15 +10,15 @@ depends-on: axicontrol-print-whole-job
 
 ## Parent
 
-Derived from the [axicontrol-architecture-spec](./axicontrol-architecture-spec.md) map. See [ADR-0006](../docs/adr/0006-webhook-and-sse-notifications.md) (webhook + SSE).
+Derived from the [axicontrol-architecture-spec](./axicontrol-architecture-spec.md) map. See [ADR-0006](../docs/adr/0006-webhook-and-sse-notifications.md) (webhook + SSE), [ADR-0011](../docs/adr/0011-backend-stack.md) (stdlib `net/http` client for delivery), and [ADR-0012](../docs/adr/0012-frontend-stack.md) (htmx SSE extension for live UI updates).
 
 ## What to build
 
 Two notification channels, both driven off the Job/Pass state transitions established in axicontrol-print-whole-job (and, once merged, axicontrol-layers-mode's `awaiting-next-pass`).
 
 - Webhook config: user can register one or more destination URLs, persisted in the datastore.
-- Webhook firing: a JSON POST to each configured URL fires on a Job reaching `complete`, a Pass reaching `failed`, and a Job reaching `awaiting-next-pass`. User-initiated transitions (pause/resume/cancel) do not fire it.
-- SSE: an endpoint streams Job/Pass state changes live to connected clients, sourced from the same transition events as the webhook.
+- Webhook firing: a JSON POST (stdlib `net/http` client, no external library) to each configured URL fires on a Job reaching `complete`, a Pass reaching `failed`, and a Job reaching `awaiting-next-pass`. User-initiated transitions (pause/resume/cancel) do not fire it.
+- SSE: an endpoint streams Job/Pass state changes live to connected clients, sourced from the same transition events as the webhook; the Job status page consumes it via htmx's SSE extension so status updates without polling or a page reload.
 
 ## Acceptance criteria
 
