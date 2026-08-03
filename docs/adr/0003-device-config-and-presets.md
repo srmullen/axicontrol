@@ -1,0 +1,5 @@
+# Device Config singleton plus named, reusable Presets
+
+We split AxiDraw CLI options along their natural boundary: a singleton **Device Config** for hardware-fixed values (`model`, `penlift`) that describe this one physical unit, and named, reusable **Presets** for the plot-affecting values (speed, acceleration, pen positions/rates/delays, etc.) that a user picks per Pass. A Pass references exactly one Preset plus an optional set of per-Pass key/value overrides layered on top — mirroring the CLI's own args-override-config-file precedence without forcing a new named Preset for a one-off tweak.
+
+The CLI's actual option precedence is SVG layer settings > CLI args > config file > defaults, which means a hand-authored SVG could silently override whatever Preset the UI displays. We close that gap by stripping AxiDraw-specific per-layer option overrides from uploaded SVGs at upload time (see [ADR-0005](./0005-filestore-abstraction-over-persistent-volume.md)), so the resolved Device Config + Preset + overrides is always the complete, sole source of truth for what actually gets sent to `axicli` — nothing hidden in the file itself.

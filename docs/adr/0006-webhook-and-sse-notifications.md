@@ -1,0 +1,5 @@
+# Generic outbound webhook plus SSE for notifications
+
+Two channels serve two different situations. Out-of-band, axicontrol POSTs a JSON payload to one or more user-configured URLs rather than building native integrations for specific providers — any downstream system that accepts a webhook (ntfy, Discord, Home Assistant, IFTTT, etc.) becomes reachable without axicontrol maintaining provider-specific code. It fires on a Job reaching `complete`, a Pass reaching `failed`, and a Job reaching `awaiting-next-pass` — the transitions that need attention while unattended. User-initiated transitions (pause/resume/cancel) don't fire it, since the user already knows they happened.
+
+For clients connected live, the API exposes a Server-Sent Events stream of the same Job/Pass state changes, chosen over polling for lower latency at effectively no extra cost, and over websockets since this is purely server-to-client. Both are emitted from the node-pinned pod ([ADR-0001](./0001-node-pinned-device-access.md)), which already owns the state transitions driving them — there's no separate notification service.
