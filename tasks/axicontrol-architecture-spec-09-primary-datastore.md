@@ -1,7 +1,7 @@
 ---
 name: axicontrol-architecture-spec-09-primary-datastore
 description: What storage technology backs axicontrol's structured records (jobs, passes, presets, device config, etc.)
-lane: backlog
+lane: todo
 tags: wayfinder:grilling
 created-at: "2026-07-31"
 created-by: seanmullen

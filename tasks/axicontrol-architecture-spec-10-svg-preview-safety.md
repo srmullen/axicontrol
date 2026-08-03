@@ -1,7 +1,7 @@
 ---
 name: axicontrol-architecture-spec-10-svg-preview-safety
 description: How uploaded SVGs are served for direct browser rendering safely, given they can embed script/event-handler content
-lane: backlog
+lane: todo
 tags: wayfinder:grilling
 created-at: "2026-07-31"
 created-by: seanmullen
