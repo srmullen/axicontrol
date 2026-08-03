@@ -1,7 +1,7 @@
 ---
 name: axicontrol-print-whole-job
 description: Print a whole-file plot job end to end
-lane: backlog
+lane: todo
 tags: ready-for-agent
 created-at: "2026-08-03"
 created-by: seanmullen

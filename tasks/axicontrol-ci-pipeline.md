@@ -1,7 +1,7 @@
 ---
 name: axicontrol-ci-pipeline
 description: 'Dagger-driven CI: lint, test, build, and publish the container image to GHCR'
-lane: backlog
+lane: todo
 tags: ready-for-agent
 created-at: "2026-08-03"
 created-by: seanmullen
