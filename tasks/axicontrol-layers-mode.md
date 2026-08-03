@@ -18,7 +18,7 @@ Extend Jobs to `layers` mode: one Pass per auto-discovered layer number, printed
 
 - Parse the uploaded SVG's layer names for AxiDraw's numeric-prefix convention (e.g. `1 black`, `2 red`) to auto-discover Passes at Job-submission time.
 - Job status gains `awaiting-next-pass`: reached when a Pass completes and a next Pass exists.
-- An explicit "advance to next Pass" action starts the next Pass's `axicli` invocation; nothing starts automatically.
+- An explicit "advance to next Pass" action starts the next Pass's `axicli` invocation; nothing starts automatically. This is an htmx button on the Job status page ([ADR-0012](../docs/adr/0012-frontend-stack.md)).
 - Job reaches `complete` only once its last Pass completes.
 - Layers mode reuses whole-mode's status machinery, pause/resume, and config resolution unchanged per Pass.
 
