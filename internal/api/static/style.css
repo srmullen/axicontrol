@@ -1,0 +1,57 @@
+body {
+  font-family: system-ui, sans-serif;
+  max-width: 60rem;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  color: #1a1a1a;
+}
+
+nav {
+  margin-bottom: 1.5rem;
+  display: flex;
+  gap: 1rem;
+}
+
+nav a {
+  text-decoration: none;
+  color: #0a58ca;
+  font-weight: 600;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-bottom: 1.5rem;
+}
+
+th, td {
+  border: 1px solid #ddd;
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+}
+
+form.inline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.5rem;
+  align-items: end;
+  margin-bottom: 1rem;
+}
+
+form.inline label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.85rem;
+}
+
+.error {
+  color: #b3261e;
+}
+
+.success {
+  color: #1e7a34;
+}
+
+button {
+  cursor: pointer;
+}

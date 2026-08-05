@@ -1,0 +1,91 @@
+{{define "presets_content"}}
+<h1>Presets</h1>
+<p>Named, reusable plot-affecting values. A Pass references exactly one Preset.</p>
+{{template "presets_section" .}}
+{{end}}
+
+{{define "presets_section"}}
+<div id="presets-section">
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Description</th>
+        <th>Speed down</th>
+        <th>Speed up</th>
+        <th>Accel</th>
+        <th>Pen down</th>
+        <th>Pen up</th>
+        <th>Rate lower</th>
+        <th>Rate raise</th>
+        <th>Delay down</th>
+        <th>Delay up</th>
+        <th>Const speed</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Presets}}{{template "preset_row" .}}{{end}}
+    </tbody>
+  </table>
+
+  <h2>New preset</h2>
+  {{template "preset_new_form" .NewForm}}
+</div>
+{{end}}
+
+{{define "preset_row"}}
+<tr id="preset-{{.ID}}">
+  <td>{{.Name}}</td>
+  <td>{{.Description}}</td>
+  <td>{{.SpeedPendown}}</td>
+  <td>{{.SpeedPenup}}</td>
+  <td>{{.Accel}}</td>
+  <td>{{.PenPosDown}}</td>
+  <td>{{.PenPosUp}}</td>
+  <td>{{.PenRateLower}}</td>
+  <td>{{.PenRateRaise}}</td>
+  <td>{{.PenDelayDown}}</td>
+  <td>{{.PenDelayUp}}</td>
+  <td>{{if .ConstSpeed}}yes{{else}}no{{end}}</td>
+  <td>
+    <button hx-get="/presets/{{.ID}}/edit" hx-target="#preset-{{.ID}}" hx-swap="outerHTML">Edit</button>
+    <button hx-delete="/presets/{{.ID}}" hx-target="#preset-{{.ID}}" hx-swap="outerHTML" hx-confirm="Delete preset &quot;{{.Name}}&quot;?">Delete</button>
+  </td>
+</tr>
+{{end}}
+
+{{define "preset_edit_row"}}
+<tr id="preset-{{.ID}}">
+  <td colspan="13">
+    <form class="inline" hx-put="/presets/{{.ID}}" hx-target="#preset-{{.ID}}" hx-swap="outerHTML">
+      {{template "preset_form_fields" .}}
+      <button type="submit">Save</button>
+      <button type="button" hx-get="/presets/{{.ID}}" hx-target="#preset-{{.ID}}" hx-swap="outerHTML">Cancel</button>
+    </form>
+  </td>
+</tr>
+{{end}}
+
+{{define "preset_new_form"}}
+<form id="new-preset-form" class="inline" hx-post="/presets" hx-target="#presets-section" hx-swap="outerHTML">
+  {{template "preset_form_fields" .}}
+  <button type="submit">Create</button>
+</form>
+{{end}}
+
+{{define "preset_form_fields"}}
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+<label>Name <input type="text" name="name" value="{{.Name}}" required></label>
+<label>Description <input type="text" name="description" value="{{.Description}}"></label>
+<label>Speed down <input type="number" name="speed_pendown" value="{{.SpeedPendown}}" required></label>
+<label>Speed up <input type="number" name="speed_penup" value="{{.SpeedPenup}}" required></label>
+<label>Accel <input type="number" name="accel" value="{{.Accel}}" required></label>
+<label>Pen down <input type="number" name="pen_pos_down" value="{{.PenPosDown}}" required></label>
+<label>Pen up <input type="number" name="pen_pos_up" value="{{.PenPosUp}}" required></label>
+<label>Rate lower <input type="number" name="pen_rate_lower" value="{{.PenRateLower}}" required></label>
+<label>Rate raise <input type="number" name="pen_rate_raise" value="{{.PenRateRaise}}" required></label>
+<label>Delay down <input type="number" name="pen_delay_down" value="{{.PenDelayDown}}" required></label>
+<label>Delay up <input type="number" name="pen_delay_up" value="{{.PenDelayUp}}" required></label>
+<label><input type="checkbox" name="const_speed" {{if .ConstSpeed}}checked{{end}}> Const speed</label>
+{{end}}

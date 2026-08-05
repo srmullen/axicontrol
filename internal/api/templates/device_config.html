@@ -1,0 +1,19 @@
+{{define "device_config_content"}}
+<h1>Device Config</h1>
+<p>Hardware-fixed values for this AxiDraw unit. There is exactly one Device Config record.</p>
+{{template "device_config_form" .}}
+{{end}}
+
+{{define "device_config_form"}}
+<form id="device-config-form" class="inline" hx-put="/device-config" hx-target="#device-config-form" hx-swap="outerHTML">
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+  {{if .Saved}}<p class="success">Saved.</p>{{end}}
+  <label>Model
+    <input type="number" name="model" value="{{.Model}}" required>
+  </label>
+  <label>Pen lift
+    <input type="number" name="penlift" value="{{.Penlift}}" required>
+  </label>
+  <button type="submit">Save</button>
+</form>
+{{end}}
