@@ -1,5 +1,6 @@
 BINARY := axicontrold
 IMAGE := axicontrol
+PORT ?= 3535
 
 .PHONY: help
 help: ## Show this help
@@ -10,8 +11,8 @@ build: ## Compile the axicontrold binary into ./bin
 	go build -o bin/$(BINARY) ./cmd/axicontrold
 
 .PHONY: run
-run: ## Run the service locally
-	go run ./cmd/axicontrold
+run: ## Run the service locally (override port: make run PORT=9090)
+	AXICONTROL_PORT=$(PORT) go run ./cmd/axicontrold
 
 .PHONY: test
 test: ## Run the Go test suite
