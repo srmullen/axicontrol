@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 )
 
@@ -16,7 +18,7 @@ func (s *Server) handleSysinfo(w http.ResponseWriter, r *http.Request) {
 		args = append(args, "--port", s.devicePath)
 	}
 
-	out, err := s.runAxicli(args...)
+	out, err := s.runAxicli(r.Context(), args...)
 	if err != nil {
 		s.logger.Error("axicli sysinfo failed", "error", err, "output", string(out))
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("axicli sysinfo: %v", err))
@@ -27,7 +29,16 @@ func (s *Server) handleSysinfo(w http.ResponseWriter, r *http.Request) {
 }
 
 // runAxicliCmd shells out to the axicli binary. It's the production
-// implementation of Server.runAxicli; tests substitute a fake.
-func runAxicliCmd(args ...string) ([]byte, error) {
-	return exec.Command("axicli", args...).CombinedOutput()
+// implementation of Server.runAxicli; tests substitute a fake. ctx
+// cancellation sends SIGINT rather than the exec package's default
+// SIGKILL, and (WaitDelay left unset) waits indefinitely for axicli to
+// exit on its own rather than forcing it — pausing a plot means finishing
+// the current line segment and writing a checkpoint before exiting, not an
+// instant kill.
+func runAxicliCmd(ctx context.Context, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "axicli", args...)
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(os.Interrupt)
+	}
+	return cmd.CombinedOutput()
 }

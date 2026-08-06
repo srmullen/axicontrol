@@ -135,3 +135,72 @@ func TestPVStoreLocalPathCleanupDoesNotDeleteFile(t *testing.T) {
 	_, err = os.Stat(path)
 	require.NoError(t, err, "PVStore's LocalPath must not delete the underlying stored file on cleanup")
 }
+
+func TestPVStoreAllowsCheckpointsNamespacedKey(t *testing.T) {
+	s, err := NewPVStore(t.TempDir())
+	require.NoError(t, err)
+
+	require.NoError(t, s.Put("checkpoints/5.svg", strings.NewReader("progress")))
+
+	rc, err := s.Get("checkpoints/5.svg")
+	require.NoError(t, err)
+	defer func() { _ = rc.Close() }()
+	data, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	require.Equal(t, "progress", string(data))
+}
+
+func TestPVStoreRejectsNestingBeyondCheckpointsNamespace(t *testing.T) {
+	s, err := NewPVStore(t.TempDir())
+	require.NoError(t, err)
+
+	require.Error(t, s.Put("checkpoints/nested/5.svg", strings.NewReader("x")))
+	require.Error(t, s.Put("checkpoints/../escape.svg", strings.NewReader("x")))
+}
+
+func TestPVStoreLocalWritePathCreatesParentDirForNewKey(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewPVStore(root)
+	require.NoError(t, err)
+
+	path, cleanup, err := s.LocalWritePath("checkpoints/5.svg")
+	require.NoError(t, err)
+	defer cleanup()
+
+	require.Equal(t, filepath.Join(root, "checkpoints", "5.svg"), path)
+	require.NoError(t, os.WriteFile(path, []byte("progress"), 0o644))
+
+	rc, err := s.Get("checkpoints/5.svg")
+	require.NoError(t, err)
+	defer func() { _ = rc.Close() }()
+	data, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	require.Equal(t, "progress", string(data))
+}
+
+func TestPVStoreLocalWritePathTargetsSamePathOnRepeatedCalls(t *testing.T) {
+	s, err := NewPVStore(t.TempDir())
+	require.NoError(t, err)
+
+	path1, cleanup1, err := s.LocalWritePath("checkpoints/5.svg")
+	require.NoError(t, err)
+	cleanup1()
+	require.NoError(t, os.WriteFile(path1, []byte("first"), 0o644))
+
+	path2, cleanup2, err := s.LocalWritePath("checkpoints/5.svg")
+	require.NoError(t, err)
+	defer cleanup2()
+
+	require.Equal(t, path1, path2)
+	data, err := os.ReadFile(path2)
+	require.NoError(t, err)
+	require.Equal(t, "first", string(data), "same key must resolve to the same path")
+}
+
+func TestPVStoreLocalWritePathRejectsPathTraversalKey(t *testing.T) {
+	s, err := NewPVStore(t.TempDir())
+	require.NoError(t, err)
+
+	_, _, err = s.LocalWritePath("../escape.svg")
+	require.Error(t, err)
+}

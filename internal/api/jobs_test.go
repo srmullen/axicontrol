@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -119,7 +121,7 @@ func TestBuildAxicliArgsNoDevicePath(t *testing.T) {
 	cfg := basePreset()
 	device := deviceConfigView{Model: 2, Penlift: 3}
 
-	args := buildAxicliArgs("/data/files/a.svg", cfg, device, "", nil)
+	args := buildAxicliArgs(axicliTarget{filePath: "/data/files/a.svg"}, "/data/checkpoints/1.svg", cfg, device, "")
 
 	require.Equal(t, []string{
 		"/data/files/a.svg",
@@ -135,6 +137,7 @@ func TestBuildAxicliArgsNoDevicePath(t *testing.T) {
 		"--pen_delay_up", "2",
 		"--model", "2",
 		"--penlift", "3",
+		"-o", "/data/checkpoints/1.svg",
 	}, args)
 }
 
@@ -142,21 +145,23 @@ func TestBuildAxicliArgsWithDevicePath(t *testing.T) {
 	cfg := basePreset()
 	device := deviceConfigView{Model: 1, Penlift: 1}
 
-	args := buildAxicliArgs("/data/files/a.svg", cfg, device, "/dev/axidraw", nil)
+	args := buildAxicliArgs(axicliTarget{filePath: "/data/files/a.svg"}, "/data/checkpoints/1.svg", cfg, device, "/dev/axidraw")
 
-	require.Equal(t, []string{"--port", "/dev/axidraw"}, args[len(args)-2:])
+	require.Contains(t, args, "--port")
+	require.Equal(t, []string{"-o", "/data/checkpoints/1.svg"}, args[len(args)-2:])
 }
 
 func TestBuildAxicliArgsConstSpeedFlagOnlyWhenTrue(t *testing.T) {
 	device := deviceConfigView{Model: 1, Penlift: 1}
+	target := axicliTarget{filePath: "f.svg"}
 
 	off := basePreset()
 	off.ConstSpeed = false
-	require.NotContains(t, buildAxicliArgs("f.svg", off, device, "", nil), "--const_speed")
+	require.NotContains(t, buildAxicliArgs(target, "c.svg", off, device, ""), "--const_speed")
 
 	on := basePreset()
 	on.ConstSpeed = true
-	require.Contains(t, buildAxicliArgs("f.svg", on, device, "", nil), "--const_speed")
+	require.Contains(t, buildAxicliArgs(target, "c.svg", on, device, ""), "--const_speed")
 }
 
 func TestBuildAxicliArgsAppliesOverriddenSpeed(t *testing.T) {
@@ -165,7 +170,7 @@ func TestBuildAxicliArgsAppliesOverriddenSpeed(t *testing.T) {
 	overridden := 99
 	resolved := (overrides{SpeedPendown: &overridden}).apply(base)
 
-	args := buildAxicliArgs("f.svg", resolved, device, "", nil)
+	args := buildAxicliArgs(axicliTarget{filePath: "f.svg"}, "c.svg", resolved, device, "")
 
 	require.Contains(t, args, "99")
 	require.NotContains(t, args, "25")
@@ -175,7 +180,7 @@ func TestBuildAxicliArgsWholeModeUsesPlotMode(t *testing.T) {
 	cfg := basePreset()
 	device := deviceConfigView{Model: 1, Penlift: 1}
 
-	args := buildAxicliArgs("f.svg", cfg, device, "", nil)
+	args := buildAxicliArgs(axicliTarget{filePath: "f.svg"}, "c.svg", cfg, device, "")
 
 	require.Equal(t, []string{"f.svg", "--mode", "plot"}, args[:3])
 	require.NotContains(t, args, "--layer")
@@ -186,9 +191,31 @@ func TestBuildAxicliArgsLayersModeUsesLayerModeAndNumber(t *testing.T) {
 	device := deviceConfigView{Model: 1, Penlift: 1}
 	layer := 5
 
-	args := buildAxicliArgs("f.svg", cfg, device, "", &layer)
+	args := buildAxicliArgs(axicliTarget{filePath: "f.svg", layerNumber: &layer}, "c.svg", cfg, device, "")
 
 	require.Equal(t, []string{"f.svg", "--mode", "layers", "--layer", "5"}, args[:5])
+}
+
+func TestBuildAxicliArgsAlwaysIncludesCheckpointOutput(t *testing.T) {
+	cfg := basePreset()
+	device := deviceConfigView{Model: 1, Penlift: 1}
+
+	args := buildAxicliArgs(axicliTarget{filePath: "f.svg"}, "checkpoints/9.svg", cfg, device, "")
+
+	require.Contains(t, args, "-o")
+	require.Contains(t, args, "checkpoints/9.svg")
+}
+
+func TestBuildAxicliArgsResumeUsesResPlotModeIgnoringLayerNumber(t *testing.T) {
+	cfg := basePreset()
+	device := deviceConfigView{Model: 1, Penlift: 1}
+	layer := 2
+
+	target := axicliTarget{filePath: "checkpoints/9.svg", layerNumber: &layer, resume: true}
+	args := buildAxicliArgs(target, "checkpoints/9.svg", cfg, device, "")
+
+	require.Equal(t, []string{"checkpoints/9.svg", "--mode", "res_plot"}, args[:3])
+	require.NotContains(t, args, "--layer")
 }
 
 var jobRowIDPattern = regexp.MustCompile(`id="job-(\d+)"`)
@@ -265,7 +292,7 @@ func TestJobSubmitAndComplete(t *testing.T) {
 	fileID, presetID := seedFileAndPreset(t, s)
 
 	argsCh := make(chan []string, 1)
-	s.runAxicli = func(args ...string) ([]byte, error) {
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
 		argsCh <- args
 		return []byte("plot complete"), nil
 	}
@@ -297,7 +324,7 @@ func TestJobSubmitAppliesPassOverride(t *testing.T) {
 	fileID, presetID := seedFileAndPreset(t, s)
 
 	argsCh := make(chan []string, 1)
-	s.runAxicli = func(args ...string) ([]byte, error) {
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
 		argsCh <- args
 		return []byte("ok"), nil
 	}
@@ -308,6 +335,7 @@ func TestJobSubmitAppliesPassOverride(t *testing.T) {
 		"speed_pendown": {"5"},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
 
 	select {
 	case gotArgs := <-argsCh:
@@ -316,6 +344,10 @@ func TestJobSubmitAppliesPassOverride(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("axicli was not invoked")
 	}
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "complete")
+	}, 2*time.Second, 10*time.Millisecond, "must wait for the background goroutine to finish before the test tears down its FileStore temp dir")
 }
 
 func TestJobRetryAfterFailureRunsFresh(t *testing.T) {
@@ -323,7 +355,7 @@ func TestJobRetryAfterFailureRunsFresh(t *testing.T) {
 	fileID, presetID := seedFileAndPreset(t, s)
 
 	var callCount int32
-	s.runAxicli = func(args ...string) ([]byte, error) {
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
 		if atomic.AddInt32(&callCount, 1) == 1 {
 			return []byte("device not found"), errors.New("exit status 1")
 		}
@@ -353,11 +385,44 @@ func TestJobRetryAfterFailureRunsFresh(t *testing.T) {
 	require.EqualValues(t, 2, atomic.LoadInt32(&callCount))
 }
 
+func TestJobFailureDeletesCheckpoint(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+
+	argsCh := make(chan []string, 1)
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
+		argsCh <- args
+		return []byte("device not found"), errors.New("exit status 1")
+	}
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
+
+	var args []string
+	select {
+	case args = <-argsCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("axicli was not invoked")
+	}
+	checkpointPath := checkpointPathFromArgs(t, args)
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "failed")
+	}, 2*time.Second, 10*time.Millisecond)
+
+	_, err := os.Stat(checkpointPath)
+	require.True(t, os.IsNotExist(err), "a genuinely failed pass must leave no checkpoint behind")
+}
+
 func TestJobRetryRejectedWhenNotFailed(t *testing.T) {
 	s := newTestServer(t)
 	fileID, presetID := seedFileAndPreset(t, s)
 
-	s.runAxicli = func(args ...string) ([]byte, error) {
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
 		return []byte("ok"), nil
 	}
 
@@ -384,7 +449,7 @@ func TestJobSubmitRejectedWhileAlreadyPrinting(t *testing.T) {
 
 	started := make(chan struct{})
 	release := make(chan struct{})
-	s.runAxicli = func(args ...string) ([]byte, error) {
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
 		close(started)
 		<-release
 		return []byte("ok"), nil
@@ -501,7 +566,7 @@ func TestJobSubmitLayersModeCreatesOnePassPerLayerAndStartsFirst(t *testing.T) {
 	fileID, presetID := seedLayeredFileAndPreset(t, s)
 
 	argsCh := make(chan []string, 1)
-	s.runAxicli = func(args ...string) ([]byte, error) {
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
 		argsCh <- args
 		return []byte("layer plotted"), nil
 	}
@@ -544,7 +609,7 @@ func TestJobLayersModeAdvanceRunsNextLayerThenCompletes(t *testing.T) {
 	fileID, presetID := seedLayeredFileAndPreset(t, s)
 
 	argsCh := make(chan []string, 2)
-	s.runAxicli = func(args ...string) ([]byte, error) {
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
 		argsCh <- args
 		return []byte("layer plotted"), nil
 	}
@@ -592,7 +657,7 @@ func TestJobLayersModeAdvanceRejectedBeforeAwaitingNextPass(t *testing.T) {
 
 	started := make(chan struct{})
 	release := make(chan struct{})
-	s.runAxicli = func(args ...string) ([]byte, error) {
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
 		close(started)
 		<-release
 		return []byte("ok"), nil
@@ -618,6 +683,9 @@ func TestJobLayersModeAdvanceRejectedBeforeAwaitingNextPass(t *testing.T) {
 	require.Equal(t, http.StatusConflict, rr.Code)
 
 	close(release)
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "awaiting-next-pass")
+	}, 2*time.Second, 10*time.Millisecond, "must wait for the background goroutine to finish before the test tears down its FileStore temp dir")
 }
 
 func TestJobLayersModeFailedPassCanBeRetriedThenAdvanced(t *testing.T) {
@@ -625,7 +693,7 @@ func TestJobLayersModeFailedPassCanBeRetriedThenAdvanced(t *testing.T) {
 	fileID, presetID := seedLayeredFileAndPreset(t, s)
 
 	var callCount int32
-	s.runAxicli = func(args ...string) ([]byte, error) {
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
 		if atomic.AddInt32(&callCount, 1) == 1 {
 			return []byte("device error"), errors.New("exit status 1")
 		}
@@ -674,7 +742,7 @@ func TestJobLayersModeHoldsDeviceClaimThroughAwaitingNextPass(t *testing.T) {
 	layeredFileID, presetID := seedLayeredFileAndPreset(t, s)
 	wholeFileID, _ := seedFileAndPreset(t, s)
 
-	s.runAxicli = func(args ...string) ([]byte, error) {
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
 		return []byte("ok"), nil
 	}
 
@@ -717,6 +785,10 @@ func TestJobLayersModeHoldsDeviceClaimThroughAwaitingNextPass(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.NotContains(t, rr.Body.String(), "already printing")
+	thirdJobID := firstJobID(t, rr.Body.String())
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, thirdJobID), "complete")
+	}, 2*time.Second, 10*time.Millisecond, "must wait for the third job's own background goroutine to finish before the test tears down its FileStore temp dir")
 }
 
 func TestJobSubmitRejectsInvalidMode(t *testing.T) {
@@ -730,4 +802,426 @@ func TestJobSubmitRejectsInvalidMode(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Contains(t, rr.Body.String(), "invalid mode")
+}
+
+// postJob issues a bodyless POST to one of a Job's action endpoints
+// (pause/resume/cancel/retry/advance), the shape all of them share.
+func postJob(t *testing.T, s *Server, jobID int64, action string) *httptest.ResponseRecorder {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/jobs/"+strconv.FormatInt(jobID, 10)+"/"+action, nil)
+	s.ServeHTTP(rr, req)
+	return rr
+}
+
+// checkpointPathFromArgs extracts the -o flag's value from a captured
+// axicli invocation.
+func checkpointPathFromArgs(t *testing.T, args []string) string {
+	t.Helper()
+	for i, a := range args {
+		if a == "-o" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	t.Fatalf("no -o flag in axicli args: %v", args)
+	return ""
+}
+
+// interruptibleAxicli returns a fake s.runAxicli plus a channel reporting
+// each invocation's args: it blocks until ctx is canceled (simulating
+// requestInterrupt's SIGINT), then writes progress to the -o path — the way
+// real axicli checkpoints on a clean pause — and returns an error, as if
+// axicli exited nonzero on interrupt.
+func interruptibleAxicli() (fn func(ctx context.Context, args ...string) ([]byte, error), argsCh chan []string) {
+	argsCh = make(chan []string, 8)
+	fn = func(ctx context.Context, args ...string) ([]byte, error) {
+		argsCh <- args
+		<-ctx.Done()
+		for i, a := range args {
+			if a == "-o" && i+1 < len(args) {
+				_ = os.WriteFile(args[i+1], []byte("progress"), 0o644)
+			}
+		}
+		return []byte("interrupted"), errors.New("signal: interrupt")
+	}
+	return fn, argsCh
+}
+
+func TestJobPauseThenResumeCompletesFromCheckpoint(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+
+	var callCount int32
+	fakeRun, argsCh := interruptibleAxicli()
+	s.runAxicli = func(ctx context.Context, args ...string) ([]byte, error) {
+		if atomic.AddInt32(&callCount, 1) == 1 {
+			return fakeRun(ctx, args...)
+		}
+		argsCh <- args
+		return []byte("plot complete"), nil
+	}
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
+
+	var firstArgs []string
+	select {
+	case firstArgs = <-argsCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("axicli was not invoked")
+	}
+	checkpointPath := checkpointPathFromArgs(t, firstArgs)
+
+	rr = postJob(t, s, jobID, "pause")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "paused")
+	}, 2*time.Second, 10*time.Millisecond)
+
+	_, err := os.Stat(checkpointPath)
+	require.NoError(t, err, "a pause must leave a checkpoint file behind")
+
+	rr = postJob(t, s, jobID, "resume")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resumeArgs []string
+	select {
+	case resumeArgs = <-argsCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("axicli was not invoked for resume")
+	}
+	require.Equal(t, checkpointPath, resumeArgs[0], "resume must plot the checkpoint file, not the original")
+	require.Contains(t, resumeArgs, "res_plot")
+	require.Equal(t, checkpointPath, checkpointPathFromArgs(t, resumeArgs), "resume must keep writing to the same checkpoint key")
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "complete")
+	}, 2*time.Second, 10*time.Millisecond)
+	require.EqualValues(t, 2, atomic.LoadInt32(&callCount))
+
+	_, err = os.Stat(checkpointPath)
+	require.True(t, os.IsNotExist(err), "the checkpoint must be gone once the Pass completes")
+}
+
+func TestJobCanBePausedAndResumedMoreThanOnce(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+
+	var callCount int32
+	fakeRun, argsCh := interruptibleAxicli()
+	s.runAxicli = func(ctx context.Context, args ...string) ([]byte, error) {
+		if atomic.AddInt32(&callCount, 1) <= 2 {
+			return fakeRun(ctx, args...)
+		}
+		argsCh <- args
+		return []byte("plot complete"), nil
+	}
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-argsCh:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("axicli was not invoked for run %d", i+1)
+		}
+
+		rr = postJob(t, s, jobID, "pause")
+		require.Equal(t, http.StatusOK, rr.Code)
+		require.Eventually(t, func() bool {
+			return strings.Contains(jobRow(t, s, jobID), "paused")
+		}, 2*time.Second, 10*time.Millisecond, "pause/resume cycle %d", i+1)
+
+		rr = postJob(t, s, jobID, "resume")
+		require.Equal(t, http.StatusOK, rr.Code)
+	}
+
+	select {
+	case <-argsCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("axicli was not invoked for final run")
+	}
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "complete")
+	}, 2*time.Second, 10*time.Millisecond)
+	require.EqualValues(t, 3, atomic.LoadInt32(&callCount), "must have run fresh once, then resumed twice")
+}
+
+func TestJobPauseRejectedWhenNotPrinting(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+
+	s.runAxicli = func(ctx context.Context, args ...string) ([]byte, error) {
+		return []byte("ok"), nil
+	}
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "complete")
+	}, 2*time.Second, 10*time.Millisecond)
+
+	rr = postJob(t, s, jobID, "pause")
+	require.Equal(t, http.StatusConflict, rr.Code)
+}
+
+func TestJobResumeRejectedWhenNotPaused(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+
+	s.runAxicli = func(ctx context.Context, args ...string) ([]byte, error) {
+		return []byte("ok"), nil
+	}
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "complete")
+	}, 2*time.Second, 10*time.Millisecond)
+
+	rr = postJob(t, s, jobID, "resume")
+	require.Equal(t, http.StatusConflict, rr.Code)
+}
+
+func TestJobCancelWhileRunningInterruptsAndLandsCancelled(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+
+	fakeRun, argsCh := interruptibleAxicli()
+	s.runAxicli = fakeRun
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
+
+	var args []string
+	select {
+	case args = <-argsCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("axicli was not invoked")
+	}
+	checkpointPath := checkpointPathFromArgs(t, args)
+
+	rr = postJob(t, s, jobID, "cancel")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "cancelled")
+	}, 2*time.Second, 10*time.Millisecond)
+	require.NotContains(t, jobRow(t, s, jobID), "paused")
+
+	_, err := os.Stat(checkpointPath)
+	require.True(t, os.IsNotExist(err), "cancelling a running pass must leave no checkpoint behind")
+
+	// The device must be free again for a new job. Swap in a fast fake
+	// first — the original one blocks on ctx.Done(), which nothing here
+	// would ever cancel.
+	s.runAxicli = func(_ context.Context, _ ...string) ([]byte, error) {
+		return []byte("ok"), nil
+	}
+	rr = doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NotContains(t, rr.Body.String(), "already printing")
+	newJobID := firstJobID(t, rr.Body.String())
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, newJobID), "complete")
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestJobCancelFromPausedLeavesNoCheckpointAndJobCancelled(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+
+	fakeRun, argsCh := interruptibleAxicli()
+	s.runAxicli = fakeRun
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
+
+	var args []string
+	select {
+	case args = <-argsCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("axicli was not invoked")
+	}
+	checkpointPath := checkpointPathFromArgs(t, args)
+
+	rr = postJob(t, s, jobID, "pause")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "paused")
+	}, 2*time.Second, 10*time.Millisecond)
+
+	_, err := os.Stat(checkpointPath)
+	require.NoError(t, err, "pause must have left a checkpoint")
+
+	rr = postJob(t, s, jobID, "cancel")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, jobRow(t, s, jobID), "cancelled")
+
+	_, err = os.Stat(checkpointPath)
+	require.True(t, os.IsNotExist(err), "cancelling a paused pass must leave no checkpoint behind")
+}
+
+func TestJobCancelFromAwaitingNextPassCancelsSynchronously(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedLayeredFileAndPreset(t, s)
+
+	s.runAxicli = func(ctx context.Context, args ...string) ([]byte, error) {
+		return []byte("layer plotted"), nil
+	}
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+		"mode":      {"layers"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "awaiting-next-pass")
+	}, 2*time.Second, 10*time.Millisecond)
+
+	rr = postJob(t, s, jobID, "cancel")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, jobRow(t, s, jobID), "cancelled")
+
+	// The device must be free again for a new job.
+	rr = doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+		"mode":      {"whole"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NotContains(t, rr.Body.String(), "already printing")
+	newJobID := firstJobID(t, rr.Body.String())
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, newJobID), "complete")
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestJobCancelRejectedWhenAlreadyTerminal(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+
+	s.runAxicli = func(ctx context.Context, args ...string) ([]byte, error) {
+		return []byte("ok"), nil
+	}
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "complete")
+	}, 2*time.Second, 10*time.Millisecond)
+
+	rr = postJob(t, s, jobID, "cancel")
+	require.Equal(t, http.StatusConflict, rr.Code)
+}
+
+func passStatus(t *testing.T, s *Server, passID int64) string {
+	t.Helper()
+	var status string
+	require.NoError(t, s.db.QueryRowContext(context.Background(), "SELECT status FROM passes WHERE id = ?", passID).Scan(&status))
+	return status
+}
+
+func TestTryStartPassRunFailsIfStatusChangedConcurrently(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+	ctx := context.Background()
+
+	passID, err := s.insertJobAndPasses(ctx, fileID, presetID, "whole", nil, overrides{})
+	require.NoError(t, err)
+
+	// Simulate a concurrent synchronous cancel landing between executePass
+	// reading "pending" and its attempt to transition to "running".
+	require.NoError(t, s.setPassStatus(ctx, passID, "cancelled", ""))
+
+	started, err := s.tryStartPassRun(ctx, passID, "pending")
+	require.NoError(t, err)
+	require.False(t, started, "must not clobber a status that changed since it was read")
+	require.Equal(t, "cancelled", passStatus(t, s, passID))
+}
+
+func TestTryStartPassRunSucceedsWhenStatusMatches(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+	ctx := context.Background()
+
+	passID, err := s.insertJobAndPasses(ctx, fileID, presetID, "whole", nil, overrides{})
+	require.NoError(t, err)
+
+	started, err := s.tryStartPassRun(ctx, passID, "pending")
+	require.NoError(t, err)
+	require.True(t, started)
+	require.Equal(t, "running", passStatus(t, s, passID))
+}
+
+func TestTryCancelIfNotRunningFailsWhenAlreadyRunning(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+	ctx := context.Background()
+
+	passID, err := s.insertJobAndPasses(ctx, fileID, presetID, "whole", nil, overrides{})
+	require.NoError(t, err)
+	require.NoError(t, s.setPassStatus(ctx, passID, "running", ""))
+
+	cancelled, err := s.tryCancelIfNotRunning(ctx, passID)
+	require.NoError(t, err)
+	require.False(t, cancelled, "must not clobber a pass that started running since it was checked")
+	require.Equal(t, "running", passStatus(t, s, passID))
+}
+
+func TestTryCancelIfNotRunningSucceedsWhenPendingOrPaused(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+	ctx := context.Background()
+
+	for _, status := range []string{"pending", "paused"} {
+		passID, err := s.insertJobAndPasses(ctx, fileID, presetID, "whole", nil, overrides{})
+		require.NoError(t, err)
+		require.NoError(t, s.setPassStatus(ctx, passID, status, ""))
+
+		cancelled, err := s.tryCancelIfNotRunning(ctx, passID)
+		require.NoError(t, err, "status %q", status)
+		require.True(t, cancelled, "status %q", status)
+		require.Equal(t, "cancelled", passStatus(t, s, passID))
+	}
 }

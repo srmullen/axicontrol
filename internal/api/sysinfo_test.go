@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -14,7 +15,7 @@ import (
 func TestHandleSysinfoSuccess(t *testing.T) {
 	s := NewServer(nil, newTestFileStore(t), "", testLogger())
 	var gotArgs []string
-	s.runAxicli = func(args ...string) ([]byte, error) {
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
 		gotArgs = args
 		return []byte("model: AxiDraw V3\n"), nil
 	}
@@ -36,7 +37,7 @@ func TestHandleSysinfoSuccess(t *testing.T) {
 func TestHandleSysinfoPassesDevicePath(t *testing.T) {
 	s := NewServer(nil, newTestFileStore(t), "/dev/axidraw", testLogger())
 	var gotArgs []string
-	s.runAxicli = func(args ...string) ([]byte, error) {
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
 		gotArgs = args
 		return []byte("ok"), nil
 	}
@@ -51,7 +52,7 @@ func TestHandleSysinfoPassesDevicePath(t *testing.T) {
 
 func TestHandleSysinfoCommandFailure(t *testing.T) {
 	s := NewServer(nil, newTestFileStore(t), "", testLogger())
-	s.runAxicli = func(args ...string) ([]byte, error) {
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
 		return []byte("device not found"), errors.New("exit status 1")
 	}
 

@@ -23,8 +23,16 @@ type FileStore interface {
 	// the caller is done with the path; adapters without direct local
 	// filesystem access would materialize a temp file here and delete it on
 	// cleanup, but PVStore's own directory already is that filesystem, so
-	// its cleanup is a no-op.
+	// its cleanup is a no-op. Returns an error if key doesn't already exist.
 	LocalPath(key string) (path string, cleanup func(), err error)
+
+	// LocalWritePath returns a filesystem path a caller (like axicli, via
+	// its -o flag) can write key's contents to directly, unlike LocalPath,
+	// key need not already exist — first-time output creates it, and a
+	// later call against the same key (e.g. axicli overwriting a
+	// checkpoint on each pause) resolves to the same path in place. The
+	// returned cleanup func follows the same contract as LocalPath's.
+	LocalWritePath(key string) (path string, cleanup func(), err error)
 }
 
 // PVStore is a FileStore backed by a directory on a mounted filesystem
@@ -46,6 +54,9 @@ func (s *PVStore) Put(key string, r io.Reader) error {
 	path, err := s.path(key)
 	if err != nil {
 		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create parent dir: %w", err)
 	}
 
 	f, err := os.Create(path)
@@ -98,11 +109,32 @@ func (s *PVStore) LocalPath(key string) (string, func(), error) {
 	return path, func() {}, nil
 }
 
-// path joins key onto root, rejecting keys that could escape root (no
-// separators, no "..") since keys are expected to be server-generated,
-// single-segment file names.
+func (s *PVStore) LocalWritePath(key string) (string, func(), error) {
+	path, err := s.path(key)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", nil, fmt.Errorf("create parent dir: %w", err)
+	}
+	return path, func() {}, nil
+}
+
+// path joins key onto root, rejecting keys that could escape root or use
+// unexpected nesting. Keys are always server-generated, never user input:
+// either a single-segment file name (uploads) or one under the
+// "checkpoints/" namespace (Pass checkpoints — ADR-0008), which is itself a
+// single segment once that prefix is stripped. Anything containing ".." or
+// nested any other way is rejected.
 func (s *PVStore) path(key string) (string, error) {
-	if key == "" || key != filepath.Base(key) || strings.Contains(key, "..") {
+	if key == "" || strings.Contains(key, "..") {
+		return "", fmt.Errorf("invalid filestore key %q", key)
+	}
+	base := key
+	if rest, ok := strings.CutPrefix(key, "checkpoints/"); ok {
+		base = rest
+	}
+	if base == "" || base != filepath.Base(base) {
 		return "", fmt.Errorf("invalid filestore key %q", key)
 	}
 	return filepath.Join(s.root, key), nil

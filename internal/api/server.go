@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"html/template"
@@ -20,7 +21,7 @@ type Server struct {
 	files      filestore.FileStore
 	devicePath string
 	logger     *slog.Logger
-	runAxicli  func(args ...string) ([]byte, error)
+	runAxicli  func(ctx context.Context, args ...string) ([]byte, error)
 	templates  *template.Template
 
 	// printMu guards deviceClaimed and passRunning: axicli talks to one
@@ -34,6 +35,13 @@ type Server struct {
 	printMu       sync.Mutex
 	deviceClaimed bool
 	passRunning   bool
+
+	// runMu guards currentRun: the in-flight axicli subprocess invocation
+	// (if any), so a pause/cancel HTTP handler can reach into whichever
+	// Pass execution is currently running from outside its goroutine.
+	// printMu's passRunning already guarantees at most one is ever live.
+	runMu      sync.Mutex
+	currentRun *runRegistration
 }
 
 // NewServer constructs a Server with routes registered and ready to serve.
@@ -77,6 +85,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /jobs/{id}/row", s.handleShowJobRow)
 	s.mux.HandleFunc("POST /jobs/{id}/retry", s.handleRetryJob)
 	s.mux.HandleFunc("POST /jobs/{id}/advance", s.handleAdvanceJob)
+	s.mux.HandleFunc("POST /jobs/{id}/pause", s.handlePauseJob)
+	s.mux.HandleFunc("POST /jobs/{id}/resume", s.handleResumeJob)
+	s.mux.HandleFunc("POST /jobs/{id}/cancel", s.handleCancelJob)
 
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)

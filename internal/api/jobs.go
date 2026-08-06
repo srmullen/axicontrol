@@ -586,22 +586,30 @@ func (s *Server) handleShowJobRow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	v, ok := s.loadJobRowOrNotFound(w, r, id)
-	if !ok {
-		return
+	s.renderCurrentJobRow(w, r, id)
+}
+
+// loadJobActionTarget is the shared preamble for every Job action handler
+// (retry/advance/pause/resume/cancel): parse the path's job id, then load
+// its active Pass and derived Job status. Writes the appropriate error
+// response itself and returns ok=false when there's nothing for the caller
+// to act on.
+func (s *Server) loadJobActionTarget(w http.ResponseWriter, r *http.Request) (jobID int64, pass passSummary, jobStatus string, ok bool) {
+	jobID, err := jobIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid job id")
+		return 0, passSummary{}, "", false
 	}
 
-	s.renderFragment(w, http.StatusOK, "job_row", v)
+	pass, jobStatus, ok = s.loadActivePassForJobOrNotFound(w, r, jobID)
+	if !ok {
+		return 0, passSummary{}, "", false
+	}
+	return jobID, pass, jobStatus, true
 }
 
 func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
-	id, err := jobIDFromPath(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid job id")
-		return
-	}
-
-	pass, jobStatus, ok := s.loadActivePassForJobOrNotFound(w, r, id)
+	id, pass, jobStatus, ok := s.loadJobActionTarget(w, r)
 	if !ok {
 		return
 	}
@@ -634,13 +642,7 @@ func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
 // Server.releaseDevice) precisely so an unrelated Job can't interleave a
 // Pass on the same still-mounted artwork between layers.
 func (s *Server) handleAdvanceJob(w http.ResponseWriter, r *http.Request) {
-	id, err := jobIDFromPath(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid job id")
-		return
-	}
-
-	pass, jobStatus, ok := s.loadActivePassForJobOrNotFound(w, r, id)
+	id, pass, jobStatus, ok := s.loadJobActionTarget(w, r)
 	if !ok {
 		return
 	}
@@ -660,7 +662,7 @@ func (s *Server) handleAdvanceJob(w http.ResponseWriter, r *http.Request) {
 
 // startPassAndRenderRow launches passID's execution in the background and
 // renders jobID's row fragment for the htmx response that triggered it —
-// the common tail shared by retry and advance.
+// the common tail shared by retry, advance, and resume.
 func (s *Server) startPassAndRenderRow(w http.ResponseWriter, r *http.Request, jobID, passID int64) {
 	go s.executePass(passID)
 
@@ -669,4 +671,110 @@ func (s *Server) startPassAndRenderRow(w http.ResponseWriter, r *http.Request, j
 		return
 	}
 	s.renderFragment(w, http.StatusOK, "job_row", v)
+}
+
+// renderCurrentJobRow re-loads and renders jobID's row fragment as-is,
+// without starting anything — the common tail for pause and the
+// synchronous branch of cancel, which only change state a running Pass's
+// own goroutine (or, for cancel, this handler itself) already wrote.
+func (s *Server) renderCurrentJobRow(w http.ResponseWriter, r *http.Request, jobID int64) {
+	v, ok := s.loadJobRowOrNotFound(w, r, jobID)
+	if !ok {
+		return
+	}
+	s.renderFragment(w, http.StatusOK, "job_row", v)
+}
+
+// handlePauseJob asks the active Pass's running axicli subprocess to stop
+// (SIGINT via requestInterrupt): it finishes its current line segment,
+// writes its checkpoint, and exits (ADR-0002). That happens on the Pass's
+// own goroutine, not synchronously here, so the row rendered back still
+// reads "printing" until a subsequent poll picks up "paused".
+func (s *Server) handlePauseJob(w http.ResponseWriter, r *http.Request) {
+	id, pass, jobStatus, ok := s.loadJobActionTarget(w, r)
+	if !ok {
+		return
+	}
+
+	if jobStatus != "printing" {
+		writeError(w, http.StatusConflict, "job is not currently printing")
+		return
+	}
+
+	if !s.requestInterrupt(pass.ID, "paused") {
+		writeError(w, http.StatusConflict, "pass is no longer running")
+		return
+	}
+
+	s.renderCurrentJobRow(w, r, id)
+}
+
+// handleResumeJob resumes a paused Pass from its checkpoint (res_plot,
+// per ADR-0002). The device is still claimed by this Job from when it
+// paused (see Server.releaseDevice), so this only needs tryStartNextPass's
+// finer-grained passRunning guard — the same one advance uses — to prevent
+// double-starting it.
+func (s *Server) handleResumeJob(w http.ResponseWriter, r *http.Request) {
+	id, pass, jobStatus, ok := s.loadJobActionTarget(w, r)
+	if !ok {
+		return
+	}
+
+	if jobStatus != "paused" {
+		writeError(w, http.StatusConflict, "job is not paused")
+		return
+	}
+
+	if !s.tryStartNextPass() {
+		writeError(w, http.StatusConflict, "this job's pass is already starting")
+		return
+	}
+
+	s.startPassAndRenderRow(w, r, id, pass.ID)
+}
+
+// handleCancelJob cancels a Job from pending, paused, or running (ADR-0002)
+// — cancelled is terminal either way. A running Pass has no synchronous
+// state to change here: it's interrupted the same way pause is, landing on
+// "cancelled" instead of "paused" once axicli actually exits (see
+// executePass). A pending or paused Pass has no subprocess to stop, so it's
+// cancelled directly, including its checkpoint's deletion (a paused Pass
+// has one; a pending one may not, but Delete is delete-if-exists).
+func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
+	id, pass, jobStatus, ok := s.loadJobActionTarget(w, r)
+	if !ok {
+		return
+	}
+
+	switch jobStatus {
+	case "printing":
+		if !s.requestInterrupt(pass.ID, "cancelled") {
+			writeError(w, http.StatusConflict, "pass is no longer running")
+			return
+		}
+	case "queued", "awaiting-next-pass", "paused":
+		cancelled, err := s.tryCancelIfNotRunning(r.Context(), pass.ID)
+		if err != nil {
+			s.logger.Error("cancel pass failed", "error", err)
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !cancelled {
+			// Lost a race: the Pass started running (e.g. via resume)
+			// between loadActivePassForJobOrNotFound above and this
+			// attempt — interrupt it instead, same as the "printing" case.
+			if !s.requestInterrupt(pass.ID, "cancelled") {
+				writeError(w, http.StatusConflict, "pass is no longer running")
+				return
+			}
+			break
+		}
+		s.deleteCheckpoint(pass.ID)
+		s.releaseDevice(true)
+	default:
+		writeError(w, http.StatusConflict, "job cannot be cancelled from its current state")
+		return
+	}
+
+	s.renderCurrentJobRow(w, r, id)
 }

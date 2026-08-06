@@ -40,6 +40,9 @@
   <td>
     {{if eq .Status "failed"}}<button hx-post="/jobs/{{.ID}}/retry" hx-target="#job-{{.ID}}" hx-swap="outerHTML">Retry</button>{{end}}
     {{if eq .Status "awaiting-next-pass"}}<button hx-post="/jobs/{{.ID}}/advance" hx-target="#job-{{.ID}}" hx-swap="outerHTML">Advance to next pass</button>{{end}}
+    {{if eq .Status "printing"}}<button hx-post="/jobs/{{.ID}}/pause" hx-target="#job-{{.ID}}" hx-swap="outerHTML">Pause</button>{{end}}
+    {{if eq .Status "paused"}}<button hx-post="/jobs/{{.ID}}/resume" hx-target="#job-{{.ID}}" hx-swap="outerHTML">Resume</button>{{end}}
+    {{if or (eq .Status "queued") (eq .Status "printing") (eq .Status "paused") (eq .Status "awaiting-next-pass")}}<button hx-post="/jobs/{{.ID}}/cancel" hx-target="#job-{{.ID}}" hx-swap="outerHTML" hx-confirm="Cancel this job?">Cancel</button>{{end}}
   </td>
 </tr>
 {{end}}
