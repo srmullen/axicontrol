@@ -1,7 +1,7 @@
 ---
 name: axicontrol-device-config-presets
 description: Manage Device Config and named Presets for plot configuration
-lane: todo
+lane: review
 tags: ready-for-agent
 created-at: "2026-08-03"
 created-by: seanmullen
