@@ -42,18 +42,29 @@ type Server struct {
 	// printMu's passRunning already guarantees at most one is ever live.
 	runMu      sync.Mutex
 	currentRun *runRegistration
+
+	// subMu guards subscribers: the set of currently-connected SSE clients
+	// (ADR-0006), each identified by the channel notify publishes to and
+	// handleEvents reads from.
+	subMu       sync.Mutex
+	subscribers map[chan jobEvent]struct{}
+
+	// httpClient delivers outbound webhook POSTs (ADR-0006, ADR-0011).
+	httpClient *http.Client
 }
 
 // NewServer constructs a Server with routes registered and ready to serve.
 func NewServer(db *sql.DB, files filestore.FileStore, devicePath string, logger *slog.Logger) *Server {
 	s := &Server{
-		mux:        http.NewServeMux(),
-		db:         db,
-		files:      files,
-		devicePath: devicePath,
-		logger:     logger,
-		runAxicli:  runAxicliCmd,
-		templates:  parseTemplates(),
+		mux:         http.NewServeMux(),
+		db:          db,
+		files:       files,
+		devicePath:  devicePath,
+		logger:      logger,
+		runAxicli:   runAxicliCmd,
+		templates:   parseTemplates(),
+		subscribers: map[chan jobEvent]struct{}{},
+		httpClient:  &http.Client{Timeout: webhookTimeout},
 	}
 	s.routes()
 	return s
@@ -88,6 +99,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /jobs/{id}/pause", s.handlePauseJob)
 	s.mux.HandleFunc("POST /jobs/{id}/resume", s.handleResumeJob)
 	s.mux.HandleFunc("POST /jobs/{id}/cancel", s.handleCancelJob)
+
+	s.mux.HandleFunc("GET /webhooks", s.handleListWebhooks)
+	s.mux.HandleFunc("POST /webhooks", s.handleCreateWebhook)
+	s.mux.HandleFunc("DELETE /webhooks/{id}", s.handleDeleteWebhook)
+
+	s.mux.HandleFunc("GET /events", s.handleEvents)
 
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)

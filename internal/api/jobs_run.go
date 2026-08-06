@@ -251,6 +251,7 @@ func (s *Server) executePass(passID int64) {
 		// failure isn't a safe "leave it mounted" state to defend the way
 		// awaiting-next-pass is.
 		s.releaseDevice(true)
+		s.notify(ctx, newJobEvent("pass.failed", jobID, passID, "failed", err.Error()))
 		return
 	}
 
@@ -260,28 +261,43 @@ func (s *Server) executePass(passID int64) {
 	}
 	s.deleteCheckpoint(passID)
 
-	jobDone, err := s.isJobDone(ctx, jobID)
+	// A Pass completing never itself needs attention (ADR-0006) — only what
+	// it leaves the Job in does: either the Job is now fully complete, or
+	// (layers mode, mid-sequence) it's now awaiting its next Pass. Both the
+	// device-release decision and the notification below come from this one
+	// read, so they can never disagree about which it was.
+	status, err := s.loadJobStatus(ctx, jobID)
 	if err != nil {
 		s.logger.Error("check job completion failed", "job_id", jobID, "error", err)
-		jobDone = true // don't leave the device claimed forever if we can't tell
+		// Don't leave the device claimed forever if we can't tell what state
+		// the Job is actually in; skip notifying, since we have no status we
+		// can vouch for.
+		s.releaseDevice(true)
+		return
 	}
-	s.releaseDevice(jobDone)
+
+	switch status {
+	case "complete":
+		s.releaseDevice(true)
+		s.notify(ctx, newJobEvent("job.complete", jobID, passID, "complete", output))
+	case "awaiting-next-pass":
+		s.releaseDevice(false)
+		s.notify(ctx, newJobEvent("job.awaiting-next-pass", jobID, passID, "awaiting-next-pass", ""))
+	default:
+		// Shouldn't happen: the Pass just written "complete" only ever
+		// derives to "complete" or "awaiting-next-pass" from here.
+		s.releaseDevice(true)
+	}
 }
 
-// isJobDone reports whether jobID's derived status (see deriveJobStatus) is
-// terminal — as opposed to awaiting-next-pass, which still holds the
-// device's claim for this Job's remaining Passes.
-func (s *Server) isJobDone(ctx context.Context, jobID int64) (bool, error) {
+// loadJobStatus derives jobID's current overall status from its Passes (see
+// deriveJobStatus).
+func (s *Server) loadJobStatus(ctx context.Context, jobID int64) (string, error) {
 	passes, err := s.loadPassSummariesForJob(ctx, jobID)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	switch deriveJobStatus(passes) {
-	case "complete", "failed", "cancelled":
-		return true, nil
-	default:
-		return false, nil
-	}
+	return deriveJobStatus(passes), nil
 }
 
 // passRun identifies one Pass execution: either a fresh run (resume false)

@@ -1,0 +1,33 @@
+{{define "webhooks_content"}}
+<h1>Webhooks</h1>
+<p>Register a destination URL to receive a JSON POST when a job completes, a pass fails, or a layers-mode job is awaiting its next pass.</p>
+{{template "webhooks_section" .}}
+{{end}}
+
+{{define "webhooks_section"}}
+<div id="webhooks-section">
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+  <table>
+    <thead>
+      <tr>
+        <th>URL</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Webhooks}}
+      <tr id="webhook-{{.ID}}">
+        <td>{{.URL}}</td>
+        <td><button hx-delete="/webhooks/{{.ID}}" hx-target="#webhook-{{.ID}}" hx-swap="outerHTML" hx-confirm="Remove this webhook?">Remove</button></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+
+  <h2>Register a webhook</h2>
+  <form class="inline" hx-post="/webhooks" hx-target="#webhooks-section" hx-swap="outerHTML">
+    <label>URL <input type="url" name="url" placeholder="https://example.com/hook" required></label>
+    <button type="submit">Register</button>
+  </form>
+</div>
+{{end}}

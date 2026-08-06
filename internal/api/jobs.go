@@ -127,6 +127,11 @@ type jobRowView struct {
 	CreatedAt  string
 	PassNumber int // 1-indexed position of the active Pass
 	PassCount  int
+
+	// OOB marks this row for an out-of-band swap (see writeJobUpdateEvent):
+	// set only when rendering a row to push over SSE, never for a row
+	// rendered as an HTTP response's own primary content.
+	OOB bool
 }
 
 // Polling reports whether this row should keep htmx-polling itself for

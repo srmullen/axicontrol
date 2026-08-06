@@ -6,6 +6,7 @@
 
 {{define "jobs_section"}}
 <div id="jobs-section">
+  <div hx-ext="sse" sse-connect="/events" sse-swap="job-update" style="display:none"></div>
   <table>
     <thead>
       <tr>
@@ -28,7 +29,7 @@
 {{end}}
 
 {{define "job_row"}}
-<tr id="job-{{.ID}}"{{if .Polling}} hx-get="/jobs/{{.ID}}/row" hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML"{{end}}>
+<tr id="job-{{.ID}}"{{if .OOB}} hx-swap-oob="true"{{end}}{{if .Polling}} hx-get="/jobs/{{.ID}}/row" hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML"{{end}}>
   <td>{{.Filename}}</td>
   <td>{{.PresetName}}</td>
   <td>{{.PassNumber}}/{{.PassCount}}</td>
