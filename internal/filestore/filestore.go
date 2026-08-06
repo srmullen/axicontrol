@@ -16,6 +16,15 @@ type FileStore interface {
 	Put(key string, r io.Reader) error
 	Get(key string) (io.ReadCloser, error)
 	Delete(key string) error
+
+	// LocalPath returns a filesystem path holding key's contents, for
+	// callers (like axicli, spawned as a subprocess) that need a real path
+	// rather than a stream. The returned cleanup func must be called once
+	// the caller is done with the path; adapters without direct local
+	// filesystem access would materialize a temp file here and delete it on
+	// cleanup, but PVStore's own directory already is that filesystem, so
+	// its cleanup is a no-op.
+	LocalPath(key string) (path string, cleanup func(), err error)
 }
 
 // PVStore is a FileStore backed by a directory on a mounted filesystem
@@ -74,6 +83,19 @@ func (s *PVStore) Delete(key string) error {
 		return fmt.Errorf("remove file: %w", err)
 	}
 	return nil
+}
+
+func (s *PVStore) LocalPath(key string) (string, func(), error) {
+	path, err := s.path(key)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		return "", nil, fmt.Errorf("stat file: %w", err)
+	}
+
+	return path, func() {}, nil
 }
 
 // path joins key onto root, rejecting keys that could escape root (no

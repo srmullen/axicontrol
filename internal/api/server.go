@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"github.com/srmullen/axicontrol/internal/filestore"
 )
@@ -21,6 +22,11 @@ type Server struct {
 	logger     *slog.Logger
 	runAxicli  func(args ...string) ([]byte, error)
 	templates  *template.Template
+
+	// printMu guards printing: axicli talks to one physical, node-pinned
+	// AxiDraw (ADR-0001), so at most one Pass may run at a time.
+	printMu  sync.Mutex
+	printing bool
 }
 
 // NewServer constructs a Server with routes registered and ready to serve.
@@ -58,6 +64,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /uploads/{id}", s.handleShowUpload)
 	s.mux.HandleFunc("GET /uploads/{id}/content", s.handleUploadContent)
 	s.mux.HandleFunc("DELETE /uploads/{id}", s.handleDeleteUpload)
+
+	s.mux.HandleFunc("GET /jobs", s.handleListJobs)
+	s.mux.HandleFunc("POST /jobs", s.handleCreateJob)
+	s.mux.HandleFunc("GET /jobs/{id}/row", s.handleShowJobRow)
+	s.mux.HandleFunc("POST /jobs/{id}/retry", s.handleRetryJob)
 
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)

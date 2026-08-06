@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 )
@@ -14,15 +15,15 @@ type deviceConfigView struct {
 	Saved   bool
 }
 
-func (s *Server) loadDeviceConfig(r *http.Request) (deviceConfigView, error) {
+func (s *Server) loadDeviceConfig(ctx context.Context) (deviceConfigView, error) {
 	var v deviceConfigView
-	row := s.db.QueryRowContext(r.Context(), "SELECT model, penlift FROM device_config WHERE id = 1")
+	row := s.db.QueryRowContext(ctx, "SELECT model, penlift FROM device_config WHERE id = 1")
 	err := row.Scan(&v.Model, &v.Penlift)
 	return v, err
 }
 
 func (s *Server) handleGetDeviceConfig(w http.ResponseWriter, r *http.Request) {
-	v, err := s.loadDeviceConfig(r)
+	v, err := s.loadDeviceConfig(r.Context())
 	if err != nil {
 		s.logger.Error("load device config failed", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())

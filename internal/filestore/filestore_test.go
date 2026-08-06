@@ -88,3 +88,50 @@ func TestPVStoreRejectsPathTraversalKey(t *testing.T) {
 	_, err = s.Get("../escape.svg")
 	require.Error(t, err)
 }
+
+func TestPVStoreLocalPathReturnsReadableFile(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewPVStore(root)
+	require.NoError(t, err)
+	require.NoError(t, s.Put("a.svg", strings.NewReader("hello")))
+
+	path, cleanup, err := s.LocalPath("a.svg")
+	require.NoError(t, err)
+	defer cleanup()
+
+	require.Equal(t, filepath.Join(root, "a.svg"), path)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "hello", string(data))
+}
+
+func TestPVStoreLocalPathMissingKeyReturnsNotExist(t *testing.T) {
+	s, err := NewPVStore(t.TempDir())
+	require.NoError(t, err)
+
+	_, _, err = s.LocalPath("missing.svg")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, os.ErrNotExist))
+}
+
+func TestPVStoreLocalPathRejectsPathTraversalKey(t *testing.T) {
+	s, err := NewPVStore(t.TempDir())
+	require.NoError(t, err)
+
+	_, _, err = s.LocalPath("../escape.svg")
+	require.Error(t, err)
+}
+
+func TestPVStoreLocalPathCleanupDoesNotDeleteFile(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewPVStore(root)
+	require.NoError(t, err)
+	require.NoError(t, s.Put("a.svg", strings.NewReader("hello")))
+
+	path, cleanup, err := s.LocalPath("a.svg")
+	require.NoError(t, err)
+	cleanup()
+
+	_, err = os.Stat(path)
+	require.NoError(t, err, "PVStore's LocalPath must not delete the underlying stored file on cleanup")
+}

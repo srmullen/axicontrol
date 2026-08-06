@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -76,8 +77,8 @@ func (s *Server) loadPresets(r *http.Request) ([]presetView, error) {
 	return presets, rows.Err()
 }
 
-func (s *Server) loadPreset(r *http.Request, id int64) (presetView, error) {
-	row := s.db.QueryRowContext(r.Context(), "SELECT "+presetColumns+" FROM presets WHERE id = ?", id)
+func (s *Server) loadPreset(ctx context.Context, id int64) (presetView, error) {
+	row := s.db.QueryRowContext(ctx, "SELECT "+presetColumns+" FROM presets WHERE id = ?", id)
 	return scanPreset(row)
 }
 
@@ -202,7 +203,7 @@ func presetIDFromPath(r *http.Request) (int64, error) {
 // response itself (404 or 500) and returning ok=false when there's nothing
 // for the caller to render.
 func (s *Server) loadPresetOrNotFound(w http.ResponseWriter, r *http.Request, id int64) (presetView, bool) {
-	v, err := s.loadPreset(r, id)
+	v, err := s.loadPreset(r.Context(), id)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "preset not found")
 		return presetView{}, false
