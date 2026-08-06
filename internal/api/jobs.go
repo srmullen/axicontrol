@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+
+	"github.com/srmullen/axicontrol/internal/svg"
 )
 
 // overrides holds an optional per-Pass key/value override layered on top of
@@ -112,8 +115,9 @@ func parseOverridesForm(r *http.Request) (overrides, error) {
 	return ov, nil
 }
 
-// jobRowView is a whole-mode Job's single Pass flattened into one row: Job
-// status is derived from Pass status (ADR-0002), not tracked independently.
+// jobRowView is a Job's list of Passes flattened into one row, reporting on
+// whichever Pass is currently "active" (see activePass): Job status is
+// derived from its Passes' statuses (ADR-0002), not tracked independently.
 type jobRowView struct {
 	ID         int64
 	Filename   string
@@ -121,6 +125,8 @@ type jobRowView struct {
 	Status     string
 	Output     string
 	CreatedAt  string
+	PassNumber int // 1-indexed position of the active Pass
+	PassCount  int
 }
 
 // Polling reports whether this row should keep htmx-polling itself for
@@ -129,15 +135,99 @@ func (v jobRowView) Polling() bool {
 	return v.Status == "queued" || v.Status == "printing"
 }
 
-func passStatusToJobStatus(passStatus string) string {
-	switch passStatus {
-	case "pending":
-		return "queued"
-	case "running":
-		return "printing"
-	default:
-		return passStatus // complete, failed
+// passSummary is one Pass's state as needed to derive its Job's overall
+// status and to report on whichever Pass is currently active.
+type passSummary struct {
+	ID            int64
+	SequenceIndex int
+	Status        string
+	Output        string
+	PresetName    string
+}
+
+const passSummaryQuery = `SELECT p.id, p.sequence_index, p.status, p.output, pr.name
+	FROM passes p JOIN presets pr ON pr.id = p.preset_id
+	WHERE p.job_id = ? ORDER BY p.sequence_index`
+
+func (s *Server) loadPassSummariesForJob(ctx context.Context, jobID int64) ([]passSummary, error) {
+	rows, err := s.db.QueryContext(ctx, passSummaryQuery, jobID)
+	if err != nil {
+		return nil, err
 	}
+	defer func() { _ = rows.Close() }()
+
+	var passes []passSummary
+	for rows.Next() {
+		var p passSummary
+		if err := rows.Scan(&p.ID, &p.SequenceIndex, &p.Status, &p.Output, &p.PresetName); err != nil {
+			return nil, err
+		}
+		passes = append(passes, p)
+	}
+	return passes, rows.Err()
+}
+
+// loadAllPassSummariesByJob loads every Pass across every Job in one query,
+// grouped by job_id (each group ordered by sequence_index) — the bulk
+// counterpart to loadPassSummariesForJob, used by loadJobs to avoid a
+// per-Job round trip.
+func (s *Server) loadAllPassSummariesByJob(ctx context.Context) (map[int64][]passSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT p.job_id, p.id, p.sequence_index, p.status, p.output, pr.name
+		FROM passes p JOIN presets pr ON pr.id = p.preset_id
+		ORDER BY p.job_id, p.sequence_index`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	byJob := map[int64][]passSummary{}
+	for rows.Next() {
+		var jobID int64
+		var p passSummary
+		if err := rows.Scan(&jobID, &p.ID, &p.SequenceIndex, &p.Status, &p.Output, &p.PresetName); err != nil {
+			return nil, err
+		}
+		byJob[jobID] = append(byJob[jobID], p)
+	}
+	return byJob, rows.Err()
+}
+
+// deriveJobStatus derives a Job's overall status from its Passes (ordered by
+// sequence_index), per ADR-0002: the first not-yet-complete Pass determines
+// it — pending means "queued" if it's the very first Pass, or
+// "awaiting-next-pass" if an earlier Pass already completed; running means
+// "printing"; anything else (failed/cancelled/paused) surfaces as-is. All
+// Passes complete means the Job is complete.
+func deriveJobStatus(passes []passSummary) string {
+	for i, p := range passes {
+		switch p.Status {
+		case "complete":
+			continue
+		case "pending":
+			if i == 0 {
+				return "queued"
+			}
+			return "awaiting-next-pass"
+		case "running":
+			return "printing"
+		default:
+			return p.Status
+		}
+	}
+	return "complete"
+}
+
+// activePass returns the Pass a Job's status/output/retry/advance actions
+// pertain to: the first not-yet-complete Pass, or the last Pass if every
+// Pass is complete. Panics if passes is empty; callers only call this after
+// confirming a Job has at least one Pass.
+func activePass(passes []passSummary) passSummary {
+	for _, p := range passes {
+		if p.Status != "complete" {
+			return p
+		}
+	}
+	return passes[len(passes)-1]
 }
 
 type newJobFormView struct {
@@ -151,41 +241,87 @@ type jobsSectionView struct {
 	Form newJobFormView
 }
 
-const jobRowQuery = `SELECT j.id, f.filename, pr.name, p.status, p.output, j.created_at
-	FROM jobs j
-	JOIN files f ON f.id = j.file_id
-	JOIN passes p ON p.job_id = j.id AND p.sequence_index = 0
-	JOIN presets pr ON pr.id = p.preset_id`
-
-func scanJobRow(row interface{ Scan(...any) error }) (jobRowView, error) {
-	var v jobRowView
-	var passStatus string
-	err := row.Scan(&v.ID, &v.Filename, &v.PresetName, &passStatus, &v.Output, &v.CreatedAt)
-	v.Status = passStatusToJobStatus(passStatus)
-	return v, err
-}
-
+// loadJobs loads every Job's row view in exactly two queries total (job
+// cores, then all Passes grouped by job_id — see loadAllPassSummariesByJob),
+// rather than one round trip per Job.
 func (s *Server) loadJobs(ctx context.Context) ([]jobRowView, error) {
-	rows, err := s.db.QueryContext(ctx, jobRowQuery+" ORDER BY j.created_at DESC, j.id DESC")
+	rows, err := s.db.QueryContext(ctx, `SELECT j.id, f.filename, j.created_at
+		FROM jobs j JOIN files f ON f.id = j.file_id
+		ORDER BY j.created_at DESC, j.id DESC`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	jobs := []jobRowView{}
+	type jobCore struct {
+		id        int64
+		filename  string
+		createdAt string
+	}
+	var cores []jobCore
 	for rows.Next() {
-		v, err := scanJobRow(rows)
-		if err != nil {
+		var c jobCore
+		if err := rows.Scan(&c.id, &c.filename, &c.createdAt); err != nil {
 			return nil, err
 		}
-		jobs = append(jobs, v)
+		cores = append(cores, c)
 	}
-	return jobs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	passesByJob, err := s.loadAllPassSummariesByJob(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	jobs := []jobRowView{}
+	for _, c := range cores {
+		passes := passesByJob[c.id]
+		if len(passes) == 0 {
+			continue // shouldn't happen: every Job has at least one Pass
+		}
+		jobs = append(jobs, buildJobRowView(c.id, c.filename, c.createdAt, passes))
+	}
+	return jobs, nil
 }
 
+// buildJobRowView assembles a Job's row view from its file info and its
+// Passes' derived status, output, and progress (see deriveJobStatus,
+// activePass). passes must be non-empty and ordered by sequence_index.
+func buildJobRowView(id int64, filename, createdAt string, passes []passSummary) jobRowView {
+	active := activePass(passes)
+	return jobRowView{
+		ID:         id,
+		Filename:   filename,
+		CreatedAt:  createdAt,
+		PresetName: active.PresetName,
+		Status:     deriveJobStatus(passes),
+		Output:     active.Output,
+		PassNumber: active.SequenceIndex + 1,
+		PassCount:  len(passes),
+	}
+}
+
+// loadJobRow assembles a single Job's row view. Returns sql.ErrNoRows if id
+// doesn't exist or (should never happen) has no Passes.
 func (s *Server) loadJobRow(ctx context.Context, id int64) (jobRowView, error) {
-	row := s.db.QueryRowContext(ctx, jobRowQuery+" WHERE j.id = ?", id)
-	return scanJobRow(row)
+	var filename, createdAt string
+	row := s.db.QueryRowContext(ctx,
+		"SELECT f.filename, j.created_at FROM jobs j JOIN files f ON f.id = j.file_id WHERE j.id = ?", id)
+	if err := row.Scan(&filename, &createdAt); err != nil {
+		return jobRowView{}, err
+	}
+
+	passes, err := s.loadPassSummariesForJob(ctx, id)
+	if err != nil {
+		return jobRowView{}, err
+	}
+	if len(passes) == 0 {
+		return jobRowView{}, sql.ErrNoRows
+	}
+
+	return buildJobRowView(id, filename, createdAt, passes), nil
 }
 
 // loadJobRowOrNotFound loads a job row by id, writing the appropriate error
@@ -218,27 +354,22 @@ func (s *Server) setPassStatus(ctx context.Context, id int64, status, output str
 	return err
 }
 
-func (s *Server) loadPassIDAndStatusForJob(ctx context.Context, jobID int64) (id int64, status string, err error) {
-	row := s.db.QueryRowContext(ctx, "SELECT id, status FROM passes WHERE job_id = ? AND sequence_index = 0", jobID)
-	err = row.Scan(&id, &status)
-	return id, status, err
-}
-
-// loadPassForJobOrNotFound loads a job's single Pass id and status, writing
-// the appropriate error response itself (404 or 500) and returning ok=false
-// when there's nothing for the caller to act on.
-func (s *Server) loadPassForJobOrNotFound(w http.ResponseWriter, r *http.Request, jobID int64) (passID int64, status string, ok bool) {
-	passID, status, err := s.loadPassIDAndStatusForJob(r.Context(), jobID)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "job not found")
-		return 0, "", false
-	}
+// loadActivePassForJobOrNotFound loads a job's active Pass (see activePass)
+// along with the job's own derived status, writing the appropriate error
+// response itself (404 or 500) and returning ok=false when there's nothing
+// for the caller to act on.
+func (s *Server) loadActivePassForJobOrNotFound(w http.ResponseWriter, r *http.Request, jobID int64) (pass passSummary, jobStatus string, ok bool) {
+	passes, err := s.loadPassSummariesForJob(r.Context(), jobID)
 	if err != nil {
-		s.logger.Error("load job for retry failed", "error", err)
+		s.logger.Error("load passes for job failed", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
-		return 0, "", false
+		return passSummary{}, "", false
 	}
-	return passID, status, true
+	if len(passes) == 0 {
+		writeError(w, http.StatusNotFound, "job not found")
+		return passSummary{}, "", false
+	}
+	return activePass(passes), deriveJobStatus(passes), true
 }
 
 func (s *Server) loadJobsSectionView(r *http.Request, formErr string) (jobsSectionView, error) {
@@ -296,13 +427,23 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mode := r.FormValue("mode")
+	if mode == "" {
+		mode = "whole"
+	}
+	if mode != "whole" && mode != "layers" {
+		s.rerenderJobsSection(w, r, http.StatusOK, "invalid mode")
+		return
+	}
+
 	ov, err := parseOverridesForm(r)
 	if err != nil {
 		s.rerenderJobsSection(w, r, http.StatusOK, err.Error())
 		return
 	}
 
-	if _, _, err := s.loadFileRecord(r.Context(), fileID); errors.Is(err, sql.ErrNoRows) {
+	_, storageKey, err := s.loadFileRecord(r.Context(), fileID)
+	if errors.Is(err, sql.ErrNoRows) {
 		s.rerenderJobsSection(w, r, http.StatusOK, "selected file not found")
 		return
 	} else if err != nil {
@@ -320,25 +461,78 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.tryStartPrinting() {
+	var layerNumbers []int
+	if mode == "layers" {
+		layerNumbers, err = s.discoverLayersForFile(r.Context(), storageKey)
+		if err != nil {
+			s.logger.Error("discover layers failed", "error", err)
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if len(layerNumbers) == 0 {
+			s.rerenderJobsSection(w, r, http.StatusOK, "no numbered layers found in this SVG")
+			return
+		}
+	}
+
+	if !s.tryClaimDevice() {
 		s.rerenderJobsSection(w, r, http.StatusOK, "a job is already printing; wait for it to finish")
 		return
 	}
 
-	passID, err := s.insertJobAndPass(r.Context(), fileID, presetID, ov)
+	firstPassID, err := s.insertJobAndPasses(r.Context(), fileID, presetID, mode, layerNumbers, ov)
 	if err != nil {
-		s.finishPrinting()
+		s.releaseDevice(true)
 		s.logger.Error("create job failed", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	go s.executePass(passID)
+	go s.executePass(firstPassID)
 
 	s.rerenderJobsSection(w, r, http.StatusOK, "")
 }
 
-func (s *Server) insertJobAndPass(ctx context.Context, fileID, presetID int64, ov overrides) (int64, error) {
+// discoverLayersForFile reads storageKey's sanitized SVG content and returns
+// its auto-discovered layer numbers (see svg.DiscoverLayers), for a
+// layers-mode Job submission.
+func (s *Server) discoverLayersForFile(ctx context.Context, storageKey string) ([]int, error) {
+	rc, err := s.files.Get(storageKey)
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+
+	return svg.DiscoverLayers(data)
+}
+
+// passLayerNumbersFor returns one *int per Pass to insert for a Job of the
+// given mode, in order: nil for whole mode's single unnumbered Pass, or one
+// pointer per discovered layer number for layers mode.
+func passLayerNumbersFor(mode string, layerNumbers []int) []*int {
+	if mode != "layers" {
+		return []*int{nil}
+	}
+	numbers := make([]*int, len(layerNumbers))
+	for i := range layerNumbers {
+		numbers[i] = &layerNumbers[i]
+	}
+	return numbers
+}
+
+// insertJobAndPasses creates a Job of the given mode and one Pass per entry
+// in layerNumbers, in order (layerNumbers is ignored for whole mode, which
+// always gets exactly one Pass with no layer number). Every Pass shares the
+// same Preset + overrides — layers mode reuses whole-mode's config
+// resolution unchanged per Pass rather than accepting a distinct config per
+// layer. Returns the id of the first Pass, the one that starts immediately
+// on submission.
+func (s *Server) insertJobAndPasses(ctx context.Context, fileID, presetID int64, mode string, layerNumbers []int, ov overrides) (int64, error) {
 	overridesJSON, err := json.Marshal(ov)
 	if err != nil {
 		return 0, fmt.Errorf("marshal overrides: %w", err)
@@ -350,7 +544,7 @@ func (s *Server) insertJobAndPass(ctx context.Context, fileID, presetID int64, o
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	res, err := tx.ExecContext(ctx, "INSERT INTO jobs (file_id, mode) VALUES (?, 'whole')", fileID)
+	res, err := tx.ExecContext(ctx, "INSERT INTO jobs (file_id, mode) VALUES (?, ?)", fileID, mode)
 	if err != nil {
 		return 0, err
 	}
@@ -359,20 +553,26 @@ func (s *Server) insertJobAndPass(ctx context.Context, fileID, presetID int64, o
 		return 0, err
 	}
 
-	res, err = tx.ExecContext(ctx, `INSERT INTO passes (job_id, sequence_index, preset_id, overrides, status)
-		VALUES (?, 0, ?, ?, 'pending')`, jobID, presetID, string(overridesJSON))
-	if err != nil {
-		return 0, err
-	}
-	passID, err := res.LastInsertId()
-	if err != nil {
-		return 0, err
+	var firstPassID int64
+	for i, layerNumber := range passLayerNumbersFor(mode, layerNumbers) {
+		res, err = tx.ExecContext(ctx, `INSERT INTO passes (job_id, sequence_index, preset_id, overrides, status, layer_number)
+			VALUES (?, ?, ?, ?, 'pending', ?)`, jobID, i, presetID, string(overridesJSON), layerNumber)
+		if err != nil {
+			return 0, err
+		}
+		passID, err := res.LastInsertId()
+		if err != nil {
+			return 0, err
+		}
+		if i == 0 {
+			firstPassID = passID
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	return passID, nil
+	return firstPassID, nil
 }
 
 func jobIDFromPath(r *http.Request) (int64, error) {
@@ -401,31 +601,70 @@ func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	passID, status, ok := s.loadPassForJobOrNotFound(w, r, id)
+	pass, jobStatus, ok := s.loadActivePassForJobOrNotFound(w, r, id)
 	if !ok {
 		return
 	}
 
-	if status != "failed" {
+	if jobStatus != "failed" {
 		writeError(w, http.StatusConflict, "only a failed job can be retried")
 		return
 	}
 
-	if !s.tryStartPrinting() {
+	if !s.tryClaimDevice() {
 		writeError(w, http.StatusConflict, "a job is already printing; wait for it to finish")
 		return
 	}
 
-	if err := s.setPassStatus(r.Context(), passID, "pending", ""); err != nil {
-		s.finishPrinting()
+	if err := s.setPassStatus(r.Context(), pass.ID, "pending", ""); err != nil {
+		s.releaseDevice(true)
 		s.logger.Error("reset pass for retry failed", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	s.startPassAndRenderRow(w, r, id, pass.ID)
+}
+
+// handleAdvanceJob starts a layers-mode Job's next Pass. Valid only from
+// awaiting-next-pass — a Pass completing never auto-starts the next one
+// (ADR-0002): this is the explicit user trigger that does. Unlike
+// handleCreateJob/handleRetryJob, this doesn't reclaim the device: it stays
+// claimed by this Job across the awaiting-next-pass gap (see
+// Server.releaseDevice) precisely so an unrelated Job can't interleave a
+// Pass on the same still-mounted artwork between layers.
+func (s *Server) handleAdvanceJob(w http.ResponseWriter, r *http.Request) {
+	id, err := jobIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid job id")
+		return
+	}
+
+	pass, jobStatus, ok := s.loadActivePassForJobOrNotFound(w, r, id)
+	if !ok {
+		return
+	}
+
+	if jobStatus != "awaiting-next-pass" {
+		writeError(w, http.StatusConflict, "job is not awaiting its next pass")
+		return
+	}
+
+	if !s.tryStartNextPass() {
+		writeError(w, http.StatusConflict, "this job's next pass is already starting")
+		return
+	}
+
+	s.startPassAndRenderRow(w, r, id, pass.ID)
+}
+
+// startPassAndRenderRow launches passID's execution in the background and
+// renders jobID's row fragment for the htmx response that triggered it —
+// the common tail shared by retry and advance.
+func (s *Server) startPassAndRenderRow(w http.ResponseWriter, r *http.Request, jobID, passID int64) {
 	go s.executePass(passID)
 
-	v, ok := s.loadJobRowOrNotFound(w, r, id)
+	v, ok := s.loadJobRowOrNotFound(w, r, jobID)
 	if !ok {
 		return
 	}

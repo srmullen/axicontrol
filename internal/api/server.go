@@ -23,10 +23,17 @@ type Server struct {
 	runAxicli  func(args ...string) ([]byte, error)
 	templates  *template.Template
 
-	// printMu guards printing: axicli talks to one physical, node-pinned
-	// AxiDraw (ADR-0001), so at most one Pass may run at a time.
-	printMu  sync.Mutex
-	printing bool
+	// printMu guards deviceClaimed and passRunning: axicli talks to one
+	// physical, node-pinned AxiDraw (ADR-0001). deviceClaimed spans a whole
+	// Job, start to terminal — held through a layers-mode Job's
+	// awaiting-next-pass gaps too, so an unrelated Job can't interleave a
+	// Pass on the same still-mounted artwork between layers. passRunning is
+	// the finer-grained "an axicli subprocess is actually executing right
+	// now" flag, used to guard against double-starting a Pass (e.g. a
+	// double-clicked advance).
+	printMu       sync.Mutex
+	deviceClaimed bool
+	passRunning   bool
 }
 
 // NewServer constructs a Server with routes registered and ready to serve.
@@ -69,6 +76,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /jobs", s.handleCreateJob)
 	s.mux.HandleFunc("GET /jobs/{id}/row", s.handleShowJobRow)
 	s.mux.HandleFunc("POST /jobs/{id}/retry", s.handleRetryJob)
+	s.mux.HandleFunc("POST /jobs/{id}/advance", s.handleAdvanceJob)
 
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)

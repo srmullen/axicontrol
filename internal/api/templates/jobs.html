@@ -11,6 +11,7 @@
       <tr>
         <th>File</th>
         <th>Preset</th>
+        <th>Pass</th>
         <th>Status</th>
         <th>Submitted</th>
         <th></th>
@@ -30,12 +31,16 @@
 <tr id="job-{{.ID}}"{{if .Polling}} hx-get="/jobs/{{.ID}}/row" hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML"{{end}}>
   <td>{{.Filename}}</td>
   <td>{{.PresetName}}</td>
+  <td>{{.PassNumber}}/{{.PassCount}}</td>
   <td>
     {{.Status}}
     {{if and (eq .Status "failed") .Output}}<details><summary>details</summary><pre>{{.Output}}</pre></details>{{end}}
   </td>
   <td>{{.CreatedAt}}</td>
-  <td>{{if eq .Status "failed"}}<button hx-post="/jobs/{{.ID}}/retry" hx-target="#job-{{.ID}}" hx-swap="outerHTML">Retry</button>{{end}}</td>
+  <td>
+    {{if eq .Status "failed"}}<button hx-post="/jobs/{{.ID}}/retry" hx-target="#job-{{.ID}}" hx-swap="outerHTML">Retry</button>{{end}}
+    {{if eq .Status "awaiting-next-pass"}}<button hx-post="/jobs/{{.ID}}/advance" hx-target="#job-{{.ID}}" hx-swap="outerHTML">Advance to next pass</button>{{end}}
+  </td>
 </tr>
 {{end}}
 
@@ -52,6 +57,12 @@
     <select name="preset_id" required>
       <option value="">Select a preset</option>
       {{range .Presets}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+    </select>
+  </label>
+  <label>Mode
+    <select name="mode">
+      <option value="whole">Whole file</option>
+      <option value="layers">Layers (one Pass per numbered layer, printed one at a time)</option>
     </select>
   </label>
   <label>Speed down override <input type="number" name="speed_pendown" placeholder="preset default"></label>

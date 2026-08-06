@@ -119,7 +119,7 @@ func TestBuildAxicliArgsNoDevicePath(t *testing.T) {
 	cfg := basePreset()
 	device := deviceConfigView{Model: 2, Penlift: 3}
 
-	args := buildAxicliArgs("/data/files/a.svg", cfg, device, "")
+	args := buildAxicliArgs("/data/files/a.svg", cfg, device, "", nil)
 
 	require.Equal(t, []string{
 		"/data/files/a.svg",
@@ -142,7 +142,7 @@ func TestBuildAxicliArgsWithDevicePath(t *testing.T) {
 	cfg := basePreset()
 	device := deviceConfigView{Model: 1, Penlift: 1}
 
-	args := buildAxicliArgs("/data/files/a.svg", cfg, device, "/dev/axidraw")
+	args := buildAxicliArgs("/data/files/a.svg", cfg, device, "/dev/axidraw", nil)
 
 	require.Equal(t, []string{"--port", "/dev/axidraw"}, args[len(args)-2:])
 }
@@ -152,11 +152,11 @@ func TestBuildAxicliArgsConstSpeedFlagOnlyWhenTrue(t *testing.T) {
 
 	off := basePreset()
 	off.ConstSpeed = false
-	require.NotContains(t, buildAxicliArgs("f.svg", off, device, ""), "--const_speed")
+	require.NotContains(t, buildAxicliArgs("f.svg", off, device, "", nil), "--const_speed")
 
 	on := basePreset()
 	on.ConstSpeed = true
-	require.Contains(t, buildAxicliArgs("f.svg", on, device, ""), "--const_speed")
+	require.Contains(t, buildAxicliArgs("f.svg", on, device, "", nil), "--const_speed")
 }
 
 func TestBuildAxicliArgsAppliesOverriddenSpeed(t *testing.T) {
@@ -165,10 +165,30 @@ func TestBuildAxicliArgsAppliesOverriddenSpeed(t *testing.T) {
 	overridden := 99
 	resolved := (overrides{SpeedPendown: &overridden}).apply(base)
 
-	args := buildAxicliArgs("f.svg", resolved, device, "")
+	args := buildAxicliArgs("f.svg", resolved, device, "", nil)
 
 	require.Contains(t, args, "99")
 	require.NotContains(t, args, "25")
+}
+
+func TestBuildAxicliArgsWholeModeUsesPlotMode(t *testing.T) {
+	cfg := basePreset()
+	device := deviceConfigView{Model: 1, Penlift: 1}
+
+	args := buildAxicliArgs("f.svg", cfg, device, "", nil)
+
+	require.Equal(t, []string{"f.svg", "--mode", "plot"}, args[:3])
+	require.NotContains(t, args, "--layer")
+}
+
+func TestBuildAxicliArgsLayersModeUsesLayerModeAndNumber(t *testing.T) {
+	cfg := basePreset()
+	device := deviceConfigView{Model: 1, Penlift: 1}
+	layer := 5
+
+	args := buildAxicliArgs("f.svg", cfg, device, "", &layer)
+
+	require.Equal(t, []string{"f.svg", "--mode", "layers", "--layer", "5"}, args[:5])
 }
 
 var jobRowIDPattern = regexp.MustCompile(`id="job-(\d+)"`)
@@ -186,8 +206,28 @@ func firstJobID(t *testing.T, body string) int64 {
 // app's own endpoints, returning their ids for use in a job submission.
 func seedFileAndPreset(t *testing.T, s *Server) (fileID, presetID int64) {
 	t.Helper()
+	return seedFileContentAndPreset(t, s, validSVG)
+}
 
-	rr := doMultipartUpload(t, s, "drawing.svg", []byte(validSVG))
+// layeredSVG has two AxiDraw-numbered layers, per its numeric-prefix
+// layer-naming convention, for use in layers-mode Job tests.
+const layeredSVG = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="10" height="10">
+  <g inkscape:groupmode="layer" inkscape:label="1 black"><rect width="5" height="5"/></g>
+  <g inkscape:groupmode="layer" inkscape:label="2 red"><rect width="5" height="5" x="5" y="5"/></g>
+</svg>`
+
+// seedLayeredFileAndPreset uploads layeredSVG (two numbered layers) and
+// creates a Preset, returning their ids for use in a layers-mode Job
+// submission.
+func seedLayeredFileAndPreset(t *testing.T, s *Server) (fileID, presetID int64) {
+	t.Helper()
+	return seedFileContentAndPreset(t, s, layeredSVG)
+}
+
+func seedFileContentAndPreset(t *testing.T, s *Server, svgContent string) (fileID, presetID int64) {
+	t.Helper()
+
+	rr := doMultipartUpload(t, s, "drawing.svg", []byte(svgContent))
 	require.Equal(t, http.StatusOK, rr.Code)
 	fileID = firstUploadID(t, rr.Body.String())
 
@@ -400,4 +440,294 @@ func TestJobSubmitRejectsUnknownPreset(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Contains(t, rr.Body.String(), "preset not found")
+}
+
+func TestDeriveJobStatusQueuedWhenFirstPassPending(t *testing.T) {
+	status := deriveJobStatus([]passSummary{{SequenceIndex: 0, Status: "pending"}})
+	require.Equal(t, "queued", status)
+}
+
+func TestDeriveJobStatusPrintingWhenAPassIsRunning(t *testing.T) {
+	status := deriveJobStatus([]passSummary{
+		{SequenceIndex: 0, Status: "complete"},
+		{SequenceIndex: 1, Status: "running"},
+	})
+	require.Equal(t, "printing", status)
+}
+
+func TestDeriveJobStatusAwaitingNextPassWhenPriorPassesCompleteAndNextIsPending(t *testing.T) {
+	status := deriveJobStatus([]passSummary{
+		{SequenceIndex: 0, Status: "complete"},
+		{SequenceIndex: 1, Status: "pending"},
+	})
+	require.Equal(t, "awaiting-next-pass", status)
+}
+
+func TestDeriveJobStatusCompleteWhenAllPassesComplete(t *testing.T) {
+	status := deriveJobStatus([]passSummary{
+		{SequenceIndex: 0, Status: "complete"},
+		{SequenceIndex: 1, Status: "complete"},
+	})
+	require.Equal(t, "complete", status)
+}
+
+func TestDeriveJobStatusFailedSurfacesAsIs(t *testing.T) {
+	status := deriveJobStatus([]passSummary{
+		{SequenceIndex: 0, Status: "complete"},
+		{SequenceIndex: 1, Status: "failed"},
+	})
+	require.Equal(t, "failed", status)
+}
+
+func TestActivePassReturnsFirstIncompletePass(t *testing.T) {
+	passes := []passSummary{
+		{ID: 1, SequenceIndex: 0, Status: "complete"},
+		{ID: 2, SequenceIndex: 1, Status: "pending"},
+		{ID: 3, SequenceIndex: 2, Status: "pending"},
+	}
+	require.Equal(t, int64(2), activePass(passes).ID)
+}
+
+func TestActivePassReturnsLastPassWhenAllComplete(t *testing.T) {
+	passes := []passSummary{
+		{ID: 1, SequenceIndex: 0, Status: "complete"},
+		{ID: 2, SequenceIndex: 1, Status: "complete"},
+	}
+	require.Equal(t, int64(2), activePass(passes).ID)
+}
+
+func TestJobSubmitLayersModeCreatesOnePassPerLayerAndStartsFirst(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedLayeredFileAndPreset(t, s)
+
+	argsCh := make(chan []string, 1)
+	s.runAxicli = func(args ...string) ([]byte, error) {
+		argsCh <- args
+		return []byte("layer plotted"), nil
+	}
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+		"mode":      {"layers"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
+
+	var gotArgs []string
+	select {
+	case gotArgs = <-argsCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("axicli was not invoked")
+	}
+	require.Contains(t, gotArgs, "layers")
+	require.Contains(t, gotArgs, "--layer")
+	require.Contains(t, gotArgs, "1", "the lowest-numbered layer must run first")
+
+	require.Eventually(t, func() bool {
+		body := jobRow(t, s, jobID)
+		// Once layer 1 completes, the active/reported pass becomes layer 2
+		// (pending) — "2/2" — but the job must sit in awaiting-next-pass
+		// rather than actually starting it until the user triggers advance.
+		return strings.Contains(body, "2/2") && strings.Contains(body, "awaiting-next-pass")
+	}, 2*time.Second, 10*time.Millisecond, "job must wait for an explicit advance, not auto-continue to layer 2")
+
+	select {
+	case <-argsCh:
+		t.Fatal("axicli must not be invoked again before an explicit advance")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestJobLayersModeAdvanceRunsNextLayerThenCompletes(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedLayeredFileAndPreset(t, s)
+
+	argsCh := make(chan []string, 2)
+	s.runAxicli = func(args ...string) ([]byte, error) {
+		argsCh <- args
+		return []byte("layer plotted"), nil
+	}
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+		"mode":      {"layers"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
+
+	select {
+	case <-argsCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("axicli was not invoked for layer 1")
+	}
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "awaiting-next-pass")
+	}, 2*time.Second, 10*time.Millisecond)
+
+	rr = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/jobs/"+strconv.FormatInt(jobID, 10)+"/advance", nil)
+	s.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var secondArgs []string
+	select {
+	case secondArgs = <-argsCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("axicli was not invoked for layer 2")
+	}
+	require.Contains(t, secondArgs, "2")
+
+	require.Eventually(t, func() bool {
+		body := jobRow(t, s, jobID)
+		return strings.Contains(body, "complete") && strings.Contains(body, "2/2")
+	}, 2*time.Second, 10*time.Millisecond, "job must reach complete only after its final pass completes")
+}
+
+func TestJobLayersModeAdvanceRejectedBeforeAwaitingNextPass(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedLayeredFileAndPreset(t, s)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	s.runAxicli = func(args ...string) ([]byte, error) {
+		close(started)
+		<-release
+		return []byte("ok"), nil
+	}
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+		"mode":      {"layers"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("axicli was not invoked")
+	}
+
+	rr = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/jobs/"+strconv.FormatInt(jobID, 10)+"/advance", nil)
+	s.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusConflict, rr.Code)
+
+	close(release)
+}
+
+func TestJobLayersModeFailedPassCanBeRetriedThenAdvanced(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedLayeredFileAndPreset(t, s)
+
+	var callCount int32
+	s.runAxicli = func(args ...string) ([]byte, error) {
+		if atomic.AddInt32(&callCount, 1) == 1 {
+			return []byte("device error"), errors.New("exit status 1")
+		}
+		return []byte("ok"), nil
+	}
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+		"mode":      {"layers"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "failed")
+	}, 2*time.Second, 10*time.Millisecond)
+
+	rr = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/jobs/"+strconv.FormatInt(jobID, 10)+"/retry", nil)
+	s.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "awaiting-next-pass")
+	}, 2*time.Second, 10*time.Millisecond, "retrying the failed first layer must not skip the second")
+
+	require.EqualValues(t, 2, atomic.LoadInt32(&callCount))
+}
+
+func TestJobSubmitLayersModeRejectsSVGWithNoNumberedLayers(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s) // validSVG has no layers at all
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+		"mode":      {"layers"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "no numbered layers")
+}
+
+func TestJobLayersModeHoldsDeviceClaimThroughAwaitingNextPass(t *testing.T) {
+	s := newTestServer(t)
+	layeredFileID, presetID := seedLayeredFileAndPreset(t, s)
+	wholeFileID, _ := seedFileAndPreset(t, s)
+
+	s.runAxicli = func(args ...string) ([]byte, error) {
+		return []byte("ok"), nil
+	}
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(layeredFileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+		"mode":      {"layers"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstJobID(t, rr.Body.String())
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "awaiting-next-pass")
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// A different, unrelated Job must not be able to start on the AxiDraw
+	// while the first Job's artwork is still mounted mid-sequence, waiting
+	// on its own next-layer trigger.
+	rr = doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(wholeFileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+		"mode":      {"whole"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "already printing")
+
+	req := httptest.NewRequest(http.MethodPost, "/jobs/"+strconv.FormatInt(jobID, 10)+"/advance", nil)
+	rr = httptest.NewRecorder()
+	s.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "complete")
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Now that the layered Job is fully done, the device is free again.
+	rr = doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(wholeFileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+		"mode":      {"whole"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NotContains(t, rr.Body.String(), "already printing")
+}
+
+func TestJobSubmitRejectsInvalidMode(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+		"mode":      {"bogus"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "invalid mode")
 }
