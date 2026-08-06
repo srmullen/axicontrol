@@ -481,7 +481,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !s.tryClaimDevice() {
-		s.rerenderJobsSection(w, r, http.StatusOK, "a job is already printing; wait for it to finish")
+		s.rerenderJobsSection(w, r, http.StatusOK, deviceBusyMessage)
 		return
 	}
 
@@ -625,7 +625,7 @@ func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !s.tryClaimDevice() {
-		writeError(w, http.StatusConflict, "a job is already printing; wait for it to finish")
+		writeError(w, http.StatusConflict, deviceBusyMessage)
 		return
 	}
 

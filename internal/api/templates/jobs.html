@@ -86,5 +86,12 @@
     </select>
   </label>
   <button type="submit">Submit job</button>
+  <button type="button" hx-post="/jobs/dry-run" hx-target="#dry-run-result" hx-swap="innerHTML">Dry run (time estimate, no printing)</button>
 </form>
+<div id="dry-run-result"></div>
+{{end}}
+
+{{define "dry_run_result"}}
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+{{if .Output}}<pre>{{.Output}}</pre>{{end}}
 {{end}}

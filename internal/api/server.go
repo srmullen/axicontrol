@@ -13,6 +13,11 @@ import (
 	"github.com/srmullen/axicontrol/internal/filestore"
 )
 
+// deviceBusyMessage is shown whenever an action needing exclusive access to
+// the physical AxiDraw (a new Job, a retry, or a testing-panel jog command)
+// finds the device already claimed by another one (ADR-0001).
+const deviceBusyMessage = "a job is already printing; wait for it to finish"
+
 // Server is axicontrol's HTTP handler, wired to the device (via axicli), the
 // embedded SQLite datastore, and the uploaded-file store.
 type Server struct {
@@ -51,6 +56,14 @@ type Server struct {
 
 	// httpClient delivers outbound webhook POSTs (ADR-0006, ADR-0011).
 	httpClient *http.Client
+
+	// posMu guards carriageX/carriageY: axicontrol's own best-effort,
+	// in-memory tracking of the AxiDraw carriage's position (ADR-0004), used
+	// by the testing/jog panel's move-to-coordinate action. Zeroed at
+	// process start and whenever walk_home succeeds; never persisted, so a
+	// pod restart loses it until the next home.
+	posMu                sync.Mutex
+	carriageX, carriageY float64
 }
 
 // NewServer constructs a Server with routes registered and ready to serve.
@@ -93,6 +106,7 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("GET /jobs", s.handleListJobs)
 	s.mux.HandleFunc("POST /jobs", s.handleCreateJob)
+	s.mux.HandleFunc("POST /jobs/dry-run", s.handleDryRun)
 	s.mux.HandleFunc("GET /jobs/{id}/row", s.handleShowJobRow)
 	s.mux.HandleFunc("POST /jobs/{id}/retry", s.handleRetryJob)
 	s.mux.HandleFunc("POST /jobs/{id}/advance", s.handleAdvanceJob)
@@ -105,6 +119,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /webhooks/{id}", s.handleDeleteWebhook)
 
 	s.mux.HandleFunc("GET /events", s.handleEvents)
+
+	s.mux.HandleFunc("GET /testing", s.handleTestingPage)
+	s.mux.HandleFunc("POST /testing/sysinfo", s.handleTestSysinfo)
+	s.mux.HandleFunc("POST /testing/cycle", s.handleTestCycle)
+	s.mux.HandleFunc("POST /testing/toggle", s.handleTestToggle)
+	s.mux.HandleFunc("POST /testing/align", s.handleTestAlign)
+	s.mux.HandleFunc("POST /testing/walk-home", s.handleTestWalkHome)
+	s.mux.HandleFunc("POST /testing/move", s.handleTestMove)
 
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)

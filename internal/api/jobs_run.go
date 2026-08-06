@@ -315,6 +315,24 @@ type passRun struct {
 	resume        bool
 }
 
+// resolvePlotConfig resolves a Preset + the singleton Device Config + a set
+// of overrides into the single plot-affecting config axicli needs (ADR-0003)
+// — shared by a real Pass run (runPass) and a dry-run preview (handleDryRun)
+// so both go through the exact same resolution.
+func (s *Server) resolvePlotConfig(ctx context.Context, presetID int64, ov overrides) (presetView, deviceConfigView, error) {
+	preset, err := s.loadPreset(ctx, presetID)
+	if err != nil {
+		return presetView{}, deviceConfigView{}, fmt.Errorf("load preset: %w", err)
+	}
+
+	device, err := s.loadDeviceConfig(ctx)
+	if err != nil {
+		return presetView{}, deviceConfigView{}, fmt.Errorf("load device config: %w", err)
+	}
+
+	return ov.apply(preset), device, nil
+}
+
 // runPass resolves Device Config + Preset + Pass-level overrides into a
 // single config (ADR-0003) and invokes axicli, returning its combined
 // output on success or an error wrapping that output on failure. Either a
@@ -322,21 +340,15 @@ type passRun struct {
 // (ADR-0008), via -o, so a pause always has somewhere to write to —
 // including a resumed run's own subsequent pause.
 func (s *Server) runPass(ctx context.Context, run passRun) (string, error) {
-	preset, err := s.loadPreset(ctx, run.presetID)
-	if err != nil {
-		return "", fmt.Errorf("load preset: %w", err)
-	}
-
-	device, err := s.loadDeviceConfig(ctx)
-	if err != nil {
-		return "", fmt.Errorf("load device config: %w", err)
-	}
-
 	var ov overrides
 	if err := json.Unmarshal([]byte(run.overridesJSON), &ov); err != nil {
 		return "", fmt.Errorf("parse overrides: %w", err)
 	}
-	resolved := ov.apply(preset)
+
+	resolved, device, err := s.resolvePlotConfig(ctx, run.presetID, ov)
+	if err != nil {
+		return "", err
+	}
 
 	target := axicliTarget{resume: run.resume}
 	var cleanup func()
@@ -385,8 +397,9 @@ type axicliTarget struct {
 
 // buildAxicliArgs builds the axicli command line for target, given a
 // fully-resolved plot config (Preset + overrides already applied) and the
-// singleton Device Config. checkpointPath is always passed via -o
-// (ADR-0008). See https://axidraw.com/doc/cli_api/ for the flag reference.
+// singleton Device Config. checkpointPath is passed via -o (ADR-0008) unless
+// empty, which a dry-run preview passes deliberately — it never writes an
+// output file. See https://axidraw.com/doc/cli_api/ for the flag reference.
 func buildAxicliArgs(target axicliTarget, checkpointPath string, cfg presetView, device deviceConfigView, devicePath string) []string {
 	args := []string{target.filePath}
 	switch {
@@ -416,6 +429,8 @@ func buildAxicliArgs(target axicliTarget, checkpointPath string, cfg presetView,
 	if devicePath != "" {
 		args = append(args, "--port", devicePath)
 	}
-	args = append(args, "-o", checkpointPath)
+	if checkpointPath != "" {
+		args = append(args, "-o", checkpointPath)
+	}
 	return args
 }

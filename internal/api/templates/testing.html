@@ -1,0 +1,28 @@
+{{define "testing_content"}}
+<h1>Testing</h1>
+<p>Hardware self-test and jog panel. Move-to-coordinate is tracked in memory only — it resets to (0, 0) on restart and whenever you re-home.</p>
+{{template "testing_panel" .}}
+{{end}}
+
+{{define "testing_panel"}}
+<div id="testing-panel">
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+  {{if .Output}}<pre>{{.Output}}</pre>{{end}}
+  <p>Tracked carriage position: ({{.CarriageX}}, {{.CarriageY}}) in</p>
+
+  <div class="inline">
+    <button hx-post="/testing/sysinfo" hx-target="#testing-panel" hx-swap="outerHTML">Check status</button>
+    <button hx-post="/testing/cycle" hx-target="#testing-panel" hx-swap="outerHTML">Cycle pen</button>
+    <button hx-post="/testing/toggle" hx-target="#testing-panel" hx-swap="outerHTML">Toggle pen</button>
+    <button hx-post="/testing/align" hx-target="#testing-panel" hx-swap="outerHTML">Align</button>
+    <button hx-post="/testing/walk-home" hx-target="#testing-panel" hx-swap="outerHTML">Home</button>
+  </div>
+
+  <h2>Move to coordinate</h2>
+  <form class="inline" hx-post="/testing/move" hx-target="#testing-panel" hx-swap="outerHTML">
+    <label>X (in) <input type="number" step="any" name="x" required></label>
+    <label>Y (in) <input type="number" step="any" name="y" required></label>
+    <button type="submit">Move</button>
+  </form>
+</div>
+{{end}}

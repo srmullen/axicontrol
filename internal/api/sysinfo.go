@@ -12,13 +12,19 @@ type sysinfoResponse struct {
 	Output string `json:"output"`
 }
 
-func (s *Server) handleSysinfo(w http.ResponseWriter, r *http.Request) {
+// sysinfoArgs builds the axicli invocation for a sysinfo query, shared with
+// the testing panel's "Check status" button (see handleTestSysinfo) so both
+// query the device exactly the same way.
+func sysinfoArgs(devicePath string) []string {
 	args := []string{"sysinfo"}
-	if s.devicePath != "" {
-		args = append(args, "--port", s.devicePath)
+	if devicePath != "" {
+		args = append(args, "--port", devicePath)
 	}
+	return args
+}
 
-	out, err := s.runAxicli(r.Context(), args...)
+func (s *Server) handleSysinfo(w http.ResponseWriter, r *http.Request) {
+	out, err := s.runAxicli(r.Context(), sysinfoArgs(s.devicePath)...)
 	if err != nil {
 		s.logger.Error("axicli sysinfo failed", "error", err, "output", string(out))
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("axicli sysinfo: %v", err))
