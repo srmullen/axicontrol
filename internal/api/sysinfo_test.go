@@ -12,7 +12,7 @@ import (
 )
 
 func TestHandleSysinfoSuccess(t *testing.T) {
-	s := NewServer(nil, "", testLogger())
+	s := NewServer(nil, newTestFileStore(t), "", testLogger())
 	var gotArgs []string
 	s.runAxicli = func(args ...string) ([]byte, error) {
 		gotArgs = args
@@ -34,7 +34,7 @@ func TestHandleSysinfoSuccess(t *testing.T) {
 }
 
 func TestHandleSysinfoPassesDevicePath(t *testing.T) {
-	s := NewServer(nil, "/dev/axidraw", testLogger())
+	s := NewServer(nil, newTestFileStore(t), "/dev/axidraw", testLogger())
 	var gotArgs []string
 	s.runAxicli = func(args ...string) ([]byte, error) {
 		gotArgs = args
@@ -50,7 +50,7 @@ func TestHandleSysinfoPassesDevicePath(t *testing.T) {
 }
 
 func TestHandleSysinfoCommandFailure(t *testing.T) {
-	s := NewServer(nil, "", testLogger())
+	s := NewServer(nil, newTestFileStore(t), "", testLogger())
 	s.runAxicli = func(args ...string) ([]byte, error) {
 		return []byte("device not found"), errors.New("exit status 1")
 	}

@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/srmullen/axicontrol/internal/api"
 	"github.com/srmullen/axicontrol/internal/config"
+	"github.com/srmullen/axicontrol/internal/filestore"
 	"github.com/srmullen/axicontrol/internal/store"
 )
 
@@ -39,9 +41,14 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
+	files, err := filestore.NewPVStore(filepath.Join(cfg.DataDir, "files"))
+	if err != nil {
+		return fmt.Errorf("open filestore: %w", err)
+	}
+
 	httpServer := &http.Server{
 		Addr:    ":" + cfg.Port,
-		Handler: api.NewServer(db, cfg.DevicePath, logger),
+		Handler: api.NewServer(db, files, cfg.DevicePath, logger),
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

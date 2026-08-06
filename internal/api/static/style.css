@@ -55,3 +55,8 @@ form.inline label {
 button {
   cursor: pointer;
 }
+
+.upload-preview-image {
+  max-width: 100%;
+  border: 1px solid #ddd;
+}

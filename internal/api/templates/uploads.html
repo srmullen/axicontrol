@@ -1,0 +1,47 @@
+{{define "uploads_content"}}
+<h1>Upload Library</h1>
+<p>Sanitized SVGs you've uploaded. Any of them can be the source file for a future plot job.</p>
+{{template "uploads_section" .}}
+<div id="upload-preview"></div>
+{{end}}
+
+{{define "uploads_section"}}
+<div id="uploads-section">
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+  <table>
+    <thead>
+      <tr>
+        <th>Filename</th>
+        <th>Size</th>
+        <th>Uploaded</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Uploads}}{{template "upload_row" .}}{{end}}
+    </tbody>
+  </table>
+
+  <form class="inline" hx-post="/uploads" hx-target="#uploads-section" hx-swap="outerHTML" hx-encoding="multipart/form-data">
+    <label>SVG file <input type="file" name="file" accept=".svg,image/svg+xml" required></label>
+    <button type="submit">Upload</button>
+  </form>
+</div>
+{{end}}
+
+{{define "upload_row"}}
+<tr id="upload-{{.ID}}">
+  <td>{{.Filename}}</td>
+  <td>{{.SizeBytes}} bytes</td>
+  <td>{{.CreatedAt}}</td>
+  <td>
+    <button hx-get="/uploads/{{.ID}}" hx-target="#upload-preview" hx-swap="innerHTML">Preview</button>
+    <button hx-delete="/uploads/{{.ID}}" hx-target="#upload-{{.ID}}" hx-swap="outerHTML" hx-confirm="Delete &quot;{{.Filename}}&quot;?">Delete</button>
+  </td>
+</tr>
+{{end}}
+
+{{define "upload_preview"}}
+<h2>{{.Filename}}</h2>
+<img src="/uploads/{{.ID}}/content" alt="{{.Filename}}" class="upload-preview-image">
+{{end}}

@@ -162,7 +162,7 @@ func TestPresetsPersistAcrossReopen(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "axicontrol.sqlite")
 	db, err := store.Open(dbPath)
 	require.NoError(t, err)
-	s := NewServer(db, "", testLogger())
+	s := NewServer(db, newTestFileStore(t), "", testLogger())
 
 	rr := doForm(t, s, http.MethodPost, "/presets", presetForm("draft"))
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -171,7 +171,7 @@ func TestPresetsPersistAcrossReopen(t *testing.T) {
 	db2, err := store.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db2.Close()) })
-	s2 := NewServer(db2, "", testLogger())
+	s2 := NewServer(db2, newTestFileStore(t), "", testLogger())
 
 	rr = httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/presets", nil)

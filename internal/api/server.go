@@ -7,13 +7,16 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+
+	"github.com/srmullen/axicontrol/internal/filestore"
 )
 
-// Server is axicontrol's HTTP handler, wired to the device (via axicli) and
-// the embedded SQLite datastore.
+// Server is axicontrol's HTTP handler, wired to the device (via axicli), the
+// embedded SQLite datastore, and the uploaded-file store.
 type Server struct {
 	mux        *http.ServeMux
 	db         *sql.DB
+	files      filestore.FileStore
 	devicePath string
 	logger     *slog.Logger
 	runAxicli  func(args ...string) ([]byte, error)
@@ -21,10 +24,11 @@ type Server struct {
 }
 
 // NewServer constructs a Server with routes registered and ready to serve.
-func NewServer(db *sql.DB, devicePath string, logger *slog.Logger) *Server {
+func NewServer(db *sql.DB, files filestore.FileStore, devicePath string, logger *slog.Logger) *Server {
 	s := &Server{
 		mux:        http.NewServeMux(),
 		db:         db,
+		files:      files,
 		devicePath: devicePath,
 		logger:     logger,
 		runAxicli:  runAxicliCmd,
@@ -48,6 +52,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /presets/{id}/edit", s.handleEditPreset)
 	s.mux.HandleFunc("PUT /presets/{id}", s.handleUpdatePreset)
 	s.mux.HandleFunc("DELETE /presets/{id}", s.handleDeletePreset)
+
+	s.mux.HandleFunc("GET /uploads", s.handleListUploads)
+	s.mux.HandleFunc("POST /uploads", s.handleCreateUpload)
+	s.mux.HandleFunc("GET /uploads/{id}", s.handleShowUpload)
+	s.mux.HandleFunc("GET /uploads/{id}/content", s.handleUploadContent)
+	s.mux.HandleFunc("DELETE /uploads/{id}", s.handleDeleteUpload)
 
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)

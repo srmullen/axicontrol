@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/srmullen/axicontrol/internal/filestore"
 	"github.com/srmullen/axicontrol/internal/store"
 )
 
@@ -19,7 +20,14 @@ func newTestServer(t *testing.T) *Server {
 	db, err := store.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	return NewServer(db, "", testLogger())
+	return NewServer(db, newTestFileStore(t), "", testLogger())
+}
+
+func newTestFileStore(t *testing.T) filestore.FileStore {
+	t.Helper()
+	fs, err := filestore.NewPVStore(t.TempDir())
+	require.NoError(t, err)
+	return fs
 }
 
 func TestDeviceConfigShowsDefaults(t *testing.T) {
@@ -39,7 +47,7 @@ func TestDeviceConfigUpdatePersists(t *testing.T) {
 	db, err := store.Open(dbPath)
 	require.NoError(t, err)
 
-	s := NewServer(db, "", testLogger())
+	s := NewServer(db, newTestFileStore(t), "", testLogger())
 
 	form := url.Values{"model": {"3"}, "penlift": {"2"}}
 	rr := httptest.NewRecorder()
@@ -56,7 +64,7 @@ func TestDeviceConfigUpdatePersists(t *testing.T) {
 	db2, err := store.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db2.Close()) })
-	s2 := NewServer(db2, "", testLogger())
+	s2 := NewServer(db2, newTestFileStore(t), "", testLogger())
 
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/device-config", nil)

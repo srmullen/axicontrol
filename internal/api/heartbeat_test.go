@@ -23,7 +23,7 @@ func TestHeartbeatCreateThenList(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-	s := NewServer(db, "", testLogger())
+	s := NewServer(db, newTestFileStore(t), "", testLogger())
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/heartbeat", nil)
@@ -52,7 +52,7 @@ func TestHeartbeatListEmpty(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-	s := NewServer(db, "", testLogger())
+	s := NewServer(db, newTestFileStore(t), "", testLogger())
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/heartbeat", nil)
@@ -69,7 +69,7 @@ func TestHeartbeatPersistsAcrossReopen(t *testing.T) {
 
 	db1, err := store.Open(dbPath)
 	require.NoError(t, err)
-	s1 := NewServer(db1, "", testLogger())
+	s1 := NewServer(db1, newTestFileStore(t), "", testLogger())
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/heartbeat", nil)
@@ -81,7 +81,7 @@ func TestHeartbeatPersistsAcrossReopen(t *testing.T) {
 	db2, err := store.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db2.Close()) })
-	s2 := NewServer(db2, "", testLogger())
+	s2 := NewServer(db2, newTestFileStore(t), "", testLogger())
 
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/heartbeat", nil)
