@@ -2,7 +2,7 @@
 name: axicontrol-ci-pipeline
 description: 'Dagger-driven CI: lint, test, build, and publish the container image to GHCR'
 lane: review
-tags: ready-for-agent
+tags: ready-for-agent, user-management
 created-at: "2026-08-03"
 created-by: seanmullen
 depends-on: axicontrol-backend-skeleton

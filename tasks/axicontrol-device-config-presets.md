@@ -2,7 +2,7 @@
 name: axicontrol-device-config-presets
 description: Manage Device Config and named Presets for plot configuration
 lane: review
-tags: ready-for-agent
+tags: ready-for-agent, user-management
 created-at: "2026-08-03"
 created-by: seanmullen
 depends-on: axicontrol-backend-skeleton

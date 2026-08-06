@@ -2,7 +2,7 @@
 name: axicontrol-notifications
 description: Outbound webhook and SSE notifications for plot status
 lane: todo
-tags: ready-for-agent
+tags: ready-for-agent, user-management
 created-at: "2026-08-03"
 created-by: seanmullen
 depends-on: axicontrol-print-whole-job

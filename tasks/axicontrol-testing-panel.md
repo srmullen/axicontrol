@@ -2,7 +2,7 @@
 name: axicontrol-testing-panel
 description: Hardware self-test/jog panel and per-file plot dry-run
 lane: todo
-tags: ready-for-agent
+tags: ready-for-agent, user-management
 created-at: "2026-08-03"
 created-by: seanmullen
 depends-on: axicontrol-backend-skeleton,axicontrol-print-whole-job
