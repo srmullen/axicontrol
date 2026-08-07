@@ -8,6 +8,8 @@ The image is a multi-stage Dockerfile with `gcr.io/distroless/static` as the fin
 
 CI logic — build, `golangci-lint`, test, publish — is written as a Dagger module rather than as native GitHub Actions YAML steps, with GitHub Actions kept as a thin trigger (on push/tag) that invokes the Dagger pipeline. This is a deliberate portability choice: the pipeline is expressed in code that runs identically in GitHub Actions, another CI provider, or a developer's local machine, rather than being written directly in a CI-provider-specific format that only runs there. The built image is published to GHCR, since it's free with the GitHub repo and needs no separate registry account — the homelab repo just references an image tag.
 
+**Superseded in part by [ADR-0015](./0015-split-ci-release-workflows.md):** the "thin trigger (on push/tag)" described above is now two triggers — a push-to-`main` trigger that runs lint/test/build with no publish, and a `release: published` trigger that runs the full `Publish` pipeline. Publishing on every push to `main` (tagged `latest`) is gone; everything else here (Dagger pipeline as the portable CI logic, GHCR as the publish target) stands.
+
 ## Considered Options
 
 - Docker Hub instead of GHCR — rejected: no existing standardization on Docker Hub for other homelab images; GHCR is free and closer to the source repo.

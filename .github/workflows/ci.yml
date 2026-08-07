@@ -3,14 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ["v*"]
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
-  publish:
+  ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,11 +19,5 @@ jobs:
           version: "0.21.7"
           module: ./ci
           call: >-
-            publish
+            ci
             --source=.
-            --owner=${{ github.repository_owner }}
-            --registry-username=${{ github.actor }}
-            --registry-password=env:REGISTRY_PASSWORD
-            --git-ref=${{ github.ref }}
-        env:
-          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
