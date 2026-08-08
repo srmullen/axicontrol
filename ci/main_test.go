@@ -1,6 +1,31 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"dagger/axicontrol/internal/dagger"
+)
+
+func TestBuildPlatforms(t *testing.T) {
+	want := []dagger.Platform{"linux/amd64", "linux/arm64"}
+	if len(buildPlatforms) != len(want) {
+		t.Fatalf("buildPlatforms = %v, want %v", buildPlatforms, want)
+	}
+	for i, p := range want {
+		if buildPlatforms[i] != p {
+			t.Errorf("buildPlatforms[%d] = %q, want %q", i, buildPlatforms[i], p)
+		}
+	}
+}
+
+func TestCIPlatformIsPublished(t *testing.T) {
+	for _, p := range buildPlatforms {
+		if p == ciPlatform {
+			return
+		}
+	}
+	t.Errorf("ciPlatform %q not present in buildPlatforms %v — ci.yml would verify a platform Publish doesn't ship", ciPlatform, buildPlatforms)
+}
 
 func TestImageTag(t *testing.T) {
 	tests := []struct {

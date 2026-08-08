@@ -17,6 +17,16 @@ const (
 	golangciLintTag = "v2.12.2-alpine"
 )
 
+// buildPlatforms are the platforms Publish builds and merges into the
+// published image's manifest. ciPlatform is the single platform CI verifies
+// on every push to main — pinned explicitly (rather than left to Dagger's
+// host-default platform) so the same platform is checked regardless of what
+// architecture the pipeline happens to run on, per ADR-0013's "runs
+// identically ... on a developer's machine" goal.
+var buildPlatforms = []dagger.Platform{"linux/amd64", "linux/arm64"}
+
+const ciPlatform dagger.Platform = "linux/amd64"
+
 type Axicontrol struct{}
 
 // Lint runs golangci-lint against the source.
@@ -35,9 +45,12 @@ func (m *Axicontrol) Test(ctx context.Context, source *dagger.Directory) (string
 
 // Build produces the container image defined by the repo's multi-stage
 // Dockerfile (see ADR-0014 for why the final stage is Python-capable rather
-// than distroless/static).
-func (m *Axicontrol) Build(source *dagger.Directory) *dagger.Container {
-	return source.DockerBuild()
+// than distroless/static), for the given platform. Cross-platform builds run
+// under QEMU emulation rather than cross-compiling (see ADR-0016): the
+// Dockerfile has no GOARCH override, so `go build` simply compiles for
+// whatever architecture the emulated container reports natively.
+func (m *Axicontrol) Build(source *dagger.Directory, platform dagger.Platform) *dagger.Container {
+	return source.DockerBuild(dagger.DirectoryDockerBuildOpts{Platform: platform})
 }
 
 // CI runs Lint, then Test, then Build — the same steps GitHub Actions runs
@@ -53,13 +66,15 @@ func (m *Axicontrol) CI(ctx context.Context, source *dagger.Directory) (*dagger.
 	if _, err := m.Test(ctx, source); err != nil {
 		return nil, fmt.Errorf("test: %w", err)
 	}
-	return m.Build(source), nil
+	return m.Build(source, ciPlatform), nil
 }
 
-// Publish runs CI (lint, test, build) and, only if all three succeed, pushes
-// the resulting image to GHCR. owner is the GHCR namespace (e.g. the GitHub
-// org/user) used for the image path; registryUsername is the identity to
-// authenticate to GHCR as (e.g. the actor running the workflow), which is
+// Publish runs CI (lint, test, build) and, only if all three succeed, builds
+// every platform in buildPlatforms and pushes them to GHCR as a single
+// multi-arch image (see ADR-0016 — the Pi node this deploys to is linux/arm64,
+// while local/dev use is linux/amd64). owner is the GHCR namespace (e.g. the
+// GitHub org/user) used for the image path; registryUsername is the identity
+// to authenticate to GHCR as (e.g. the actor running the workflow), which is
 // not always the same as owner. gitRef is the triggering ref as GitHub
 // Actions reports it (e.g. "refs/heads/main" or "refs/tags/v0.1.0") — tag
 // selection lives here rather than in workflow YAML so that running this
@@ -72,15 +87,19 @@ func (m *Axicontrol) Publish(
 	registryPassword *dagger.Secret,
 	gitRef string,
 ) (string, error) {
-	image, err := m.CI(ctx, source)
-	if err != nil {
+	if _, err := m.CI(ctx, source); err != nil {
 		return "", err
 	}
 
-	image = image.WithRegistryAuth("ghcr.io", registryUsername, registryPassword)
+	variants := make([]*dagger.Container, len(buildPlatforms))
+	for i, platform := range buildPlatforms {
+		variants[i] = m.Build(source, platform)
+	}
 
 	ref := fmt.Sprintf("ghcr.io/%s/axicontrol:%s", strings.ToLower(owner), imageTag(gitRef))
-	addr, err := image.Publish(ctx, ref)
+	addr, err := dag.Container().
+		WithRegistryAuth("ghcr.io", registryUsername, registryPassword).
+		Publish(ctx, ref, dagger.ContainerPublishOpts{PlatformVariants: variants})
 	if err != nil {
 		return "", fmt.Errorf("publish %s: %w", ref, err)
 	}

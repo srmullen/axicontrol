@@ -10,6 +10,8 @@ CI logic — build, `golangci-lint`, test, publish — is written as a Dagger mo
 
 **Superseded in part by [ADR-0015](./0015-split-ci-release-workflows.md):** the "thin trigger (on push/tag)" described above is now two triggers — a push-to-`main` trigger that runs lint/test/build with no publish, and a `release: published` trigger that runs the full `Publish` pipeline. Publishing on every push to `main` (tagged `latest`) is gone; everything else here (Dagger pipeline as the portable CI logic, GHCR as the publish target) stands.
 
+**Superseded in part by [ADR-0016](./0016-multi-arch-image-build.md):** the image is no longer single-platform. `Publish` now builds and merges `linux/amd64` and `linux/arm64` into one multi-arch manifest (the k8s node the AxiDraw is wired to, per [ADR-0001](./0001-node-pinned-device-access.md), is a Raspberry Pi); `ci.yml` still verifies only `linux/amd64` on push to `main`. Everything else here stands.
+
 ## Considered Options
 
 - Docker Hub instead of GHCR — rejected: no existing standardization on Docker Hub for other homelab images; GHCR is free and closer to the source repo.
