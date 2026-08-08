@@ -16,7 +16,7 @@ type sysinfoResponse struct {
 // the testing panel's "Check status" button (see handleTestSysinfo) so both
 // query the device exactly the same way.
 func sysinfoArgs(devicePath string) []string {
-	args := []string{"sysinfo"}
+	args := []string{"--mode", "sysinfo"}
 	if devicePath != "" {
 		args = append(args, "--port", devicePath)
 	}

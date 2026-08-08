@@ -25,7 +25,7 @@ func TestHandleSysinfoSuccess(t *testing.T) {
 	s.ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
-	assert.Equal(t, []string{"sysinfo"}, gotArgs, "no device path configured, should not pass --port")
+	assert.Equal(t, []string{"--mode", "sysinfo"}, gotArgs, "no device path configured, should not pass --port")
 
 	var body struct {
 		Output string `json:"output"`
@@ -47,7 +47,7 @@ func TestHandleSysinfoPassesDevicePath(t *testing.T) {
 	s.ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
-	assert.Equal(t, []string{"sysinfo", "--port", "/dev/axidraw"}, gotArgs)
+	assert.Equal(t, []string{"--mode", "sysinfo", "--port", "/dev/axidraw"}, gotArgs)
 }
 
 func TestHandleSysinfoCommandFailure(t *testing.T) {

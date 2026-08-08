@@ -43,7 +43,7 @@ func TestTestSysinfoInvokesAxicliAndShowsOutput(t *testing.T) {
 	rr := postTest(t, s, "/testing/sysinfo", nil)
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Contains(t, rr.Body.String(), "model: AxiDraw V3")
-	require.Equal(t, []string{"sysinfo"}, gotArgs)
+	require.Equal(t, []string{"--mode", "sysinfo"}, gotArgs)
 }
 
 func TestTestCycleUsesCycleMode(t *testing.T) {
