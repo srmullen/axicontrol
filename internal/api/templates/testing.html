@@ -8,21 +8,30 @@
 <div id="testing-panel">
   {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
   {{if .Output}}<pre>{{.Output}}</pre>{{end}}
+  {{if .MotorsDisabled}}<p class="warning">Motors disabled &mdash; carriage can be moved by hand; position unknown until re-enabled.</p>{{end}}
   <p>Tracked carriage position: ({{.CarriageX}}, {{.CarriageY}}) in</p>
+
+  <div class="inline">
+    {{if .MotorsDisabled}}
+    <button hx-post="/testing/enable-xy" hx-target="#testing-panel" hx-swap="outerHTML">Enable motors</button>
+    {{else}}
+    <button hx-post="/testing/disable-xy" hx-target="#testing-panel" hx-swap="outerHTML">Disable motors</button>
+    {{end}}
+  </div>
 
   <div class="inline">
     <button hx-post="/testing/sysinfo" hx-target="#testing-panel" hx-swap="outerHTML">Check status</button>
     <button hx-post="/testing/cycle" hx-target="#testing-panel" hx-swap="outerHTML">Cycle pen</button>
     <button hx-post="/testing/toggle" hx-target="#testing-panel" hx-swap="outerHTML">Toggle pen</button>
     <button hx-post="/testing/align" hx-target="#testing-panel" hx-swap="outerHTML">Align</button>
-    <button hx-post="/testing/walk-home" hx-target="#testing-panel" hx-swap="outerHTML">Home</button>
+    <button hx-post="/testing/walk-home" hx-target="#testing-panel" hx-swap="outerHTML" {{if .MotorsDisabled}}disabled{{end}}>Home</button>
   </div>
 
   <h2>Move to coordinate</h2>
   <form class="inline" hx-post="/testing/move" hx-target="#testing-panel" hx-swap="outerHTML">
-    <label>X (in) <input type="number" step="any" name="x" required></label>
-    <label>Y (in) <input type="number" step="any" name="y" required></label>
-    <button type="submit">Move</button>
+    <label>X (in) <input type="number" step="any" name="x" required {{if .MotorsDisabled}}disabled{{end}}></label>
+    <label>Y (in) <input type="number" step="any" name="y" required {{if .MotorsDisabled}}disabled{{end}}></label>
+    <button type="submit" {{if .MotorsDisabled}}disabled{{end}}>Move</button>
   </form>
 </div>
 {{end}}

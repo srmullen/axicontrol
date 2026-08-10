@@ -57,27 +57,32 @@ type Server struct {
 	// httpClient delivers outbound webhook POSTs (ADR-0006, ADR-0011).
 	httpClient *http.Client
 
-	// posMu guards carriageX/carriageY: axicontrol's own best-effort,
-	// in-memory tracking of the AxiDraw carriage's position (ADR-0004), used
-	// by the testing/jog panel's move-to-coordinate action. Zeroed at
-	// process start and whenever walk_home succeeds; never persisted, so a
-	// pod restart loses it until the next home.
+	// posMu guards carriageX/carriageY/motorsDisabled: axicontrol's own
+	// best-effort, in-memory tracking of the AxiDraw carriage's position and
+	// XY motor power state (ADR-0004), used by the testing/jog panel.
+	// carriageX/Y are zeroed at process start and whenever walk_home or
+	// enable_xy succeeds (both are reference points the hardware gives);
+	// never persisted, so a pod restart loses tracking until the next home.
+	// motorsDisabled starts true (the hardware itself powers up with XY
+	// motors off) and is set by disable_xy/align, cleared by enable_xy.
 	posMu                sync.Mutex
 	carriageX, carriageY float64
+	motorsDisabled       bool
 }
 
 // NewServer constructs a Server with routes registered and ready to serve.
 func NewServer(db *sql.DB, files filestore.FileStore, devicePath string, logger *slog.Logger) *Server {
 	s := &Server{
-		mux:         http.NewServeMux(),
-		db:          db,
-		files:       files,
-		devicePath:  devicePath,
-		logger:      logger,
-		runAxicli:   runAxicliCmd,
-		templates:   parseTemplates(),
-		subscribers: map[chan jobEvent]struct{}{},
-		httpClient:  &http.Client{Timeout: webhookTimeout},
+		mux:            http.NewServeMux(),
+		db:             db,
+		files:          files,
+		devicePath:     devicePath,
+		logger:         logger,
+		runAxicli:      runAxicliCmd,
+		templates:      parseTemplates(),
+		subscribers:    map[chan jobEvent]struct{}{},
+		httpClient:     &http.Client{Timeout: webhookTimeout},
+		motorsDisabled: true,
 	}
 	s.routes()
 	return s
@@ -125,6 +130,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /testing/cycle", s.handleTestCycle)
 	s.mux.HandleFunc("POST /testing/toggle", s.handleTestToggle)
 	s.mux.HandleFunc("POST /testing/align", s.handleTestAlign)
+	s.mux.HandleFunc("POST /testing/disable-xy", s.handleTestDisableXY)
+	s.mux.HandleFunc("POST /testing/enable-xy", s.handleTestEnableXY)
 	s.mux.HandleFunc("POST /testing/walk-home", s.handleTestWalkHome)
 	s.mux.HandleFunc("POST /testing/move", s.handleTestMove)
 

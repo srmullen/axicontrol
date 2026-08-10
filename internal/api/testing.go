@@ -9,14 +9,21 @@ import (
 
 // testingView is the hardware self-test/jog panel's current state: the
 // carriage position axicontrol has tracked in memory since the last home or
-// process start (ADR-0004), plus the outcome of whichever action was last
-// triggered.
+// process start (ADR-0004), whether the XY motors are currently known to be
+// de-energized, plus the outcome of whichever action was last triggered.
 type testingView struct {
-	CarriageX float64
-	CarriageY float64
-	Output    string
-	Error     string
+	CarriageX      float64
+	CarriageY      float64
+	MotorsDisabled bool
+	Output         string
+	Error          string
 }
+
+// motorsDisabledMessage explains why Move/Home were rejected: both assume
+// the XY motors are enabled and that the carriage hasn't been moved by hand
+// since the last home/enable (ADR-0004) — an assumption disable_xy/align
+// break.
+const motorsDisabledMessage = `motors are disabled — click "Enable motors" first`
 
 // modeArgs builds a bare-mode axicli invocation (cycle/toggle/align — the
 // "utility" modes that take no file and no manual_cmd).
@@ -42,8 +49,32 @@ func manualCmdArgs(cmd, devicePath string, extra ...string) []string {
 func (s *Server) currentTestingView(output, errMsg string) testingView {
 	s.posMu.Lock()
 	x, y := s.carriageX, s.carriageY
+	disabled := s.motorsDisabled
 	s.posMu.Unlock()
-	return testingView{CarriageX: x, CarriageY: y, Output: output, Error: errMsg}
+	return testingView{CarriageX: x, CarriageY: y, MotorsDisabled: disabled, Output: output, Error: errMsg}
+}
+
+// requireMotorsEnabled reports whether Move/Home may proceed. It's checked
+// before tryClaimDevice/runAxicli so a stale-position action never reaches
+// the hardware at all while the XY motors are known to be de-energized.
+func (s *Server) requireMotorsEnabled(w http.ResponseWriter) bool {
+	s.posMu.Lock()
+	disabled := s.motorsDisabled
+	s.posMu.Unlock()
+	if disabled {
+		s.renderTestingPanel(w, http.StatusOK, "", motorsDisabledMessage)
+		return false
+	}
+	return true
+}
+
+// setMotorsDisabled records axicontrol's best-effort view of XY motor power
+// state (ADR-0004), shared by align/disable_xy — both de-energize the
+// motors the same way.
+func (s *Server) setMotorsDisabled(disabled bool) {
+	s.posMu.Lock()
+	s.motorsDisabled = disabled
+	s.posMu.Unlock()
 }
 
 // renderTestingPanel re-renders the #testing-panel fragment with the given
@@ -105,11 +136,49 @@ func (s *Server) handleTestToggle(w http.ResponseWriter, r *http.Request) {
 	s.renderTestingPanel(w, http.StatusOK, out, "")
 }
 
+// handleTestAlign raises the pen and de-energizes the XY motors (the same
+// motors-off state disable_xy produces), so a successful align must leave
+// Move/Home guarded exactly like an explicit Disable would.
 func (s *Server) handleTestAlign(w http.ResponseWriter, r *http.Request) {
 	out, ok := s.runTestAction(w, r, modeArgs("align", s.devicePath))
 	if !ok {
 		return
 	}
+
+	s.setMotorsDisabled(true)
+
+	s.renderTestingPanel(w, http.StatusOK, out, "")
+}
+
+// handleTestDisableXY de-energizes the XY motors so the carriage can be
+// moved by hand (e.g. prior to loading a pen). It doesn't change tracked
+// position itself, but everything tracked position assumed becomes stale
+// the moment the carriage is moved by hand — see requireMotorsEnabled.
+func (s *Server) handleTestDisableXY(w http.ResponseWriter, r *http.Request) {
+	out, ok := s.runTestAction(w, r, manualCmdArgs("disable_xy", s.devicePath))
+	if !ok {
+		return
+	}
+
+	s.setMotorsDisabled(true)
+
+	s.renderTestingPanel(w, http.StatusOK, out, "")
+}
+
+// handleTestEnableXY re-energizes the XY motors. Per ADR-0004, "motors
+// enabled" is a reference point the hardware gives just like walk_home, so a
+// successful enable zeroes tracked position the same way.
+func (s *Server) handleTestEnableXY(w http.ResponseWriter, r *http.Request) {
+	out, ok := s.runTestAction(w, r, manualCmdArgs("enable_xy", s.devicePath))
+	if !ok {
+		return
+	}
+
+	s.posMu.Lock()
+	s.motorsDisabled = false
+	s.carriageX, s.carriageY = 0, 0
+	s.posMu.Unlock()
+
 	s.renderTestingPanel(w, http.StatusOK, out, "")
 }
 
@@ -117,6 +186,10 @@ func (s *Server) handleTestAlign(w http.ResponseWriter, r *http.Request) {
 // last enabled and, on success, zeros axicontrol's own tracked position to
 // match — the one reliable reference point the hardware gives (ADR-0004).
 func (s *Server) handleTestWalkHome(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMotorsEnabled(w) {
+		return
+	}
+
 	out, ok := s.runTestAction(w, r, manualCmdArgs("walk_home", s.devicePath))
 	if !ok {
 		return
@@ -146,6 +219,10 @@ func formatDist(v float64) string {
 // not per axis, so a Job can't interleave a Pass between the walk_x and
 // walk_y calls.
 func (s *Server) handleTestMove(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMotorsEnabled(w) {
+		return
+	}
+
 	if !s.tryClaimDevice() {
 		s.renderTestingPanel(w, http.StatusOK, "", deviceBusyMessage)
 		return
