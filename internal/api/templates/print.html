@@ -1,6 +1,12 @@
 {{define "print_content"}}
 <h1>{{.Upload.Filename}}</h1>
 <img src="/uploads/{{.Upload.ID}}/content" alt="{{.Upload.Filename}}" class="upload-preview-image">
+{{if .Layers}}
+<h2>Layers</h2>
+<ul>
+  {{range .Layers}}<li>{{.Number}}{{if .Labels}} — {{.Labels}}{{end}}</li>{{end}}
+</ul>
+{{end}}
 {{template "print_section" .}}
 {{end}}
 
@@ -20,7 +26,7 @@
         {{range .Presets}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
       </select>
     </label>
-    {{if .HasLayers}}
+    {{if .Layers}}
     <label>Mode
       <select name="mode">
         <option value="whole">Whole file</option>

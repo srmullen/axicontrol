@@ -3,19 +3,47 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
+
+	"github.com/srmullen/axicontrol/internal/svg"
 )
 
 // printPageView is the per-upload print page's data (ADR-0017): the Upload
-// itself, the Presets available to submit a Job against it, whether its SVG
-// has any discovered Layers (gating whether the mode selector appears at
-// all), its currently in-progress Job if any, and an inline validation
-// error from the last submission attempt.
+// itself, its discovered Layers (read-only display, axicontrol-layer-labels
+// — an empty slice also gates the mode selector's own visibility), the
+// Presets available to submit a Job against it, its currently in-progress
+// Job if any, and an inline validation error from the last submission
+// attempt.
 type printPageView struct {
 	Upload    uploadView
+	Layers    []layerView
 	Presets   []presetView
-	HasLayers bool
 	Job       *jobRowView
 	FormError string
+}
+
+// layerView is one discovered Layer's read-only display row on the print
+// page: its number, plus its raw label(s) (see svg.Layer) with the leading
+// number stripped and comma-joined — e.g. "5-red"/"5-outlines" becomes
+// "red, outlines" — since the number is already shown alongside it. Empty
+// when none of the Layer's labels have any text beyond the bare number.
+type layerView struct {
+	Number int
+	Labels string
+}
+
+// buildLayerViews converts DiscoverLayers's raw per-layer labels into their
+// print-page display form (see layerView).
+func buildLayerViews(layers []svg.Layer) []layerView {
+	views := make([]layerView, len(layers))
+	for i, l := range layers {
+		stripped := make([]string, len(l.Labels))
+		for j, label := range l.Labels {
+			stripped[j] = svg.StripNumberPrefix(label)
+		}
+		views[i] = layerView{Number: l.Number, Labels: strings.Join(stripped, ", ")}
+	}
+	return views
 }
 
 // handleUploadPrintPage renders the page scoped to a single Upload: its
@@ -53,7 +81,7 @@ func (s *Server) loadPrintPageView(r *http.Request, upload uploadView, formErr s
 		return printPageView{}, err
 	}
 
-	layerNumbers, err := s.discoverLayersForFile(r.Context(), storageKey)
+	layers, err := s.discoverLayersForFile(r.Context(), storageKey)
 	if err != nil {
 		return printPageView{}, err
 	}
@@ -70,8 +98,8 @@ func (s *Server) loadPrintPageView(r *http.Request, upload uploadView, formErr s
 
 	return printPageView{
 		Upload:    upload,
+		Layers:    buildLayerViews(layers),
 		Presets:   presets,
-		HasLayers: len(layerNumbers) > 0,
 		Job:       job,
 		FormError: formErr,
 	}, nil

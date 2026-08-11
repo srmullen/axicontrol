@@ -79,6 +79,59 @@ func TestPrintPageModeSelectorPresentWithDiscoveredLayers(t *testing.T) {
 	require.Contains(t, body, "Layers (one Pass")
 }
 
+func TestPrintPageListsLayersByNumberAndLabel(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedLayeredFileAndPreset(t, s) // layeredSVG: "1 black", "2 red"
+
+	body := printPage(t, s, fileID).Body.String()
+
+	require.Contains(t, body, "1 — black")
+	require.Contains(t, body, "2 — red")
+}
+
+// multiLabelLayeredSVG has two <g> layers that collapse into the same
+// layer number (5), per CONTEXT.md's "5-red"/"5-outlines" example.
+const multiLabelLayeredSVG = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="10" height="10">
+  <g inkscape:groupmode="layer" inkscape:label="5-red"><rect width="5" height="5"/></g>
+  <g inkscape:groupmode="layer" inkscape:label="5-outlines"><rect width="5" height="5" x="5" y="5"/></g>
+</svg>`
+
+func TestPrintPageLayerListCombinesMultipleLabelsForSameNumber(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedFileContentAndPreset(t, s, multiLabelLayeredSVG)
+
+	body := printPage(t, s, fileID).Body.String()
+
+	require.Contains(t, body, "5 — red, outlines")
+}
+
+func TestPrintPageShowsNoLayerListWithoutDiscoveredLayers(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedFileAndPreset(t, s) // validSVG has no numbered layers
+
+	body := printPage(t, s, fileID).Body.String()
+
+	require.NotContains(t, body, "<h2>Layers</h2>")
+}
+
+// bareNumberLayerSVG has a layer group with nothing after its number in the
+// label — CONTEXT.md notes this makes the Layer "not identifiable to the
+// user" by label; the print page should still list it (by number alone)
+// rather than render a dangling "5 — " with no text after the dash.
+const bareNumberLayerSVG = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="10" height="10">
+  <g inkscape:groupmode="layer" inkscape:label="5"><rect width="5" height="5"/></g>
+</svg>`
+
+func TestPrintPageListsBareNumberLayerWithoutDanglingSeparator(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedFileContentAndPreset(t, s, bareNumberLayerSVG)
+
+	body := printPage(t, s, fileID).Body.String()
+
+	require.Contains(t, body, "<li>5</li>")
+	require.NotContains(t, body, "5 —")
+}
+
 func TestPrintPageHasSubmissionFormBoundToThisUpload(t *testing.T) {
 	s := newTestServer(t)
 	fileID, _ := seedFileAndPreset(t, s)

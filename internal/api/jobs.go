@@ -474,13 +474,14 @@ func (s *Server) createJobForFile(ctx context.Context, fileID, presetID int64, m
 
 	var layerNumbers []int
 	if mode == "layers" {
-		layerNumbers, err = s.discoverLayersForFile(ctx, storageKey)
+		layers, err := s.discoverLayersForFile(ctx, storageKey)
 		if err != nil {
 			return 0, "", err
 		}
-		if len(layerNumbers) == 0 {
+		if len(layers) == 0 {
 			return 0, "no numbered layers found in this SVG", nil
 		}
+		layerNumbers = svg.Numbers(layers)
 	}
 
 	if !s.tryClaimDevice() {
@@ -498,9 +499,10 @@ func (s *Server) createJobForFile(ctx context.Context, fileID, presetID int64, m
 }
 
 // discoverLayersForFile reads storageKey's sanitized SVG content and returns
-// its auto-discovered layer numbers (see svg.DiscoverLayers), for a
-// layers-mode Job submission.
-func (s *Server) discoverLayersForFile(ctx context.Context, storageKey string) ([]int, error) {
+// its auto-discovered Layers (see svg.DiscoverLayers) — each layer number
+// together with its raw label text(s) — for a layers-mode Job submission
+// and for the print page's read-only layer list (axicontrol-layer-labels).
+func (s *Server) discoverLayersForFile(ctx context.Context, storageKey string) ([]svg.Layer, error) {
 	rc, err := s.files.Get(storageKey)
 	if err != nil {
 		return nil, fmt.Errorf("read file: %w", err)
