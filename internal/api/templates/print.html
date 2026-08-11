@@ -1,4 +1,68 @@
 {{define "print_content"}}
-<h1>{{.Filename}}</h1>
-<img src="/uploads/{{.ID}}/content" alt="{{.Filename}}" class="upload-preview-image">
+<h1>{{.Upload.Filename}}</h1>
+<img src="/uploads/{{.Upload.ID}}/content" alt="{{.Upload.Filename}}" class="upload-preview-image">
+{{template "print_section" .}}
+{{end}}
+
+{{define "print_section"}}
+<div id="print-section">
+  <div hx-ext="sse" sse-connect="/events" sse-swap="job-update" style="display:none"></div>
+
+  {{if .Job}}{{template "print_job_status" .Job}}{{end}}
+
+  <h2>Print</h2>
+  {{if .FormError}}<p class="error">{{.FormError}}</p>{{end}}
+  <form class="inline" hx-post="/uploads/{{.Upload.ID}}/jobs" hx-target="#print-section" hx-swap="outerHTML">
+    <input type="hidden" name="file_id" value="{{.Upload.ID}}">
+    <label>Preset
+      <select name="preset_id" required>
+        <option value="">Select a preset</option>
+        {{range .Presets}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+      </select>
+    </label>
+    {{if .HasLayers}}
+    <label>Mode
+      <select name="mode">
+        <option value="whole">Whole file</option>
+        <option value="layers">Layers (one Pass per numbered layer, printed one at a time)</option>
+      </select>
+    </label>
+    {{end}}
+    <label>Speed down override <input type="number" name="speed_pendown" placeholder="preset default"></label>
+    <label>Speed up override <input type="number" name="speed_penup" placeholder="preset default"></label>
+    <label>Accel override <input type="number" name="accel" placeholder="preset default"></label>
+    <label>Pen down override <input type="number" name="pen_pos_down" placeholder="preset default"></label>
+    <label>Pen up override <input type="number" name="pen_pos_up" placeholder="preset default"></label>
+    <label>Rate lower override <input type="number" name="pen_rate_lower" placeholder="preset default"></label>
+    <label>Rate raise override <input type="number" name="pen_rate_raise" placeholder="preset default"></label>
+    <label>Delay down override <input type="number" name="pen_delay_down" placeholder="preset default"></label>
+    <label>Delay up override <input type="number" name="pen_delay_up" placeholder="preset default"></label>
+    <label>Const speed override
+      <select name="const_speed">
+        <option value="">preset default</option>
+        <option value="true">on</option>
+        <option value="false">off</option>
+      </select>
+    </label>
+    <button type="submit">Submit job</button>
+    <button type="button" hx-post="/jobs/dry-run" hx-target="#dry-run-result" hx-swap="innerHTML">Dry run (time estimate, no printing)</button>
+  </form>
+  <div id="dry-run-result"></div>
+</div>
+{{end}}
+
+{{define "print_job_status"}}
+<div id="print-job-{{.ID}}"{{if .OOB}} hx-swap-oob="true"{{end}}{{if .Polling}} hx-get="/jobs/{{.ID}}/print-status" hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML"{{end}}>
+  <h2>Current job</h2>
+  <p>Preset: {{.PresetName}}</p>
+  <p>Pass {{.PassNumber}}/{{.PassCount}}</p>
+  <p>Status: {{.Status}}
+    {{if and (eq .Status "failed") .Output}}<details><summary>details</summary><pre>{{.Output}}</pre></details>{{end}}
+  </p>
+</div>
+{{end}}
+
+{{define "dry_run_result"}}
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+{{if .Output}}<pre>{{.Output}}</pre>{{end}}
 {{end}}

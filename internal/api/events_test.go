@@ -63,12 +63,11 @@ func TestWebhookFiresOnJobComplete(t *testing.T) {
 		return []byte("plot complete"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	require.Eventually(t, func() bool {
 		return wr.count() > 0
@@ -90,12 +89,11 @@ func TestWebhookFiresOnPassFailed(t *testing.T) {
 		return []byte("device not found"), errors.New("exit status 1")
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	require.Eventually(t, func() bool {
 		return wr.count() > 0
@@ -118,13 +116,12 @@ func TestWebhookFiresOnJobAwaitingNextPass(t *testing.T) {
 		return []byte("layer plotted"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 		"mode":      {"layers"},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	require.Eventually(t, func() bool {
 		return wr.count() > 0
@@ -148,12 +145,11 @@ func TestWebhookDoesNotFireOnPauseResumeOrCancel(t *testing.T) {
 	fakeRun, argsCh := interruptibleAxicli()
 	s.runAxicli = fakeRun
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	select {
 	case <-argsCh:
@@ -198,8 +194,7 @@ func TestWebhookFiresToMultipleRegisteredURLs(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -245,12 +240,11 @@ func TestSSEStreamReceivesJobUpdateOnComplete(t *testing.T) {
 		return s.subscriberCount() > 0
 	}, 2*time.Second, 5*time.Millisecond, "SSE client never subscribed")
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	var sawEventName, sawOOBRow bool
 	deadline := time.After(3 * time.Second)
@@ -268,6 +262,64 @@ func TestSSEStreamReceivesJobUpdateOnComplete(t *testing.T) {
 		}
 	}
 	require.True(t, sawEventName, "expected a named job-update SSE event")
+}
+
+// TestSSEStreamJobUpdateIncludesPrintPageStatusFragment verifies the same
+// job-update event a connected /jobs page consumes also carries an
+// OOB-swap fragment for the print page's live status card (ADR-0017,
+// print_job_status) — one SSE broadcast serving both a /jobs table row and
+// a print page's status card, distinguished only by which id a given
+// client's own DOM happens to contain.
+func TestSSEStreamJobUpdateIncludesPrintPageStatusFragment(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
+		return []byte("ok"), nil
+	}
+
+	httpServer := httptest.NewServer(s)
+	defer httpServer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, httpServer.URL+"/events", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	lines := make(chan string, 256)
+	go func() {
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+		}
+	}()
+
+	require.Eventually(t, func() bool {
+		return s.subscriberCount() > 0
+	}, 2*time.Second, 5*time.Millisecond, "SSE client never subscribed")
+
+	rr := submitJob(t, s, fileID, url.Values{
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstPrintJobID(t, rr.Body.String())
+
+	var sawPrintOOB bool
+	deadline := time.After(3 * time.Second)
+	for !sawPrintOOB {
+		select {
+		case line := <-lines:
+			if strings.Contains(line, `id="print-job-`+strconv.FormatInt(jobID, 10)+`"`) && strings.Contains(line, "hx-swap-oob") {
+				sawPrintOOB = true
+			}
+		case <-deadline:
+			t.Fatal("did not receive the print page's OOB status fragment in time")
+		}
+	}
 }
 
 func TestSSEStreamDoesNotReceiveUpdateOnPause(t *testing.T) {
@@ -300,12 +352,11 @@ func TestSSEStreamDoesNotReceiveUpdateOnPause(t *testing.T) {
 		return s.subscriberCount() > 0
 	}, 2*time.Second, 5*time.Millisecond, "SSE client never subscribed")
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	select {
 	case <-argsCh:

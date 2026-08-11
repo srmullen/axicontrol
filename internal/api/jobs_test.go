@@ -218,12 +218,23 @@ func TestBuildAxicliArgsResumeUsesResPlotModeIgnoringLayerNumber(t *testing.T) {
 	require.NotContains(t, args, "--layer")
 }
 
-var jobRowIDPattern = regexp.MustCompile(`id="job-(\d+)"`)
-
-func firstJobID(t *testing.T, body string) int64 {
+// submitJob POSTs a Job-creation form to fileID's upload-scoped endpoint
+// (POST /uploads/{id}/jobs) — the print page's route (ADR-0017) — without a
+// file_id form field, since the URL itself scopes the request to fileID.
+func submitJob(t *testing.T, s *Server, fileID int64, form url.Values) *httptest.ResponseRecorder {
 	t.Helper()
-	match := jobRowIDPattern.FindStringSubmatch(body)
-	require.NotNil(t, match, "expected a job row id in body: %s", body)
+	return doForm(t, s, http.MethodPost, "/uploads/"+strconv.FormatInt(fileID, 10)+"/jobs", form)
+}
+
+var printJobIDPattern = regexp.MustCompile(`id="print-job-(\d+)"`)
+
+// firstPrintJobID extracts a Job's id from a print page's rendered status
+// card (see print_job_status) — the shape a Job-creation response now takes
+// (ADR-0017).
+func firstPrintJobID(t *testing.T, body string) int64 {
+	t.Helper()
+	match := printJobIDPattern.FindStringSubmatch(body)
+	require.NotNil(t, match, "expected a print job status id in body: %s", body)
 	id, err := strconv.ParseInt(match[1], 10, 64)
 	require.NoError(t, err)
 	return id
@@ -287,6 +298,32 @@ func TestJobsListEmpty(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 }
 
+func TestJobsPageOffersNoWayToCreateAJob(t *testing.T) {
+	s := newTestServer(t)
+	seedFileAndPreset(t, s) // an Upload/Preset exist, so an absent form isn't just "nothing to pick from"
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
+	s.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	body := rr.Body.String()
+	require.NotContains(t, body, `hx-post="/jobs"`, "job creation must have moved entirely to the print page")
+	require.NotContains(t, body, `name="file_id"`)
+	require.NotContains(t, body, "Select a file")
+}
+
+func TestPostJobsRouteNoLongerExists(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+
+	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
+		"file_id":   {strconv.FormatInt(fileID, 10)},
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+	})
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code, "job creation is now exclusively /uploads/{id}/jobs; GET /jobs still exists for history")
+}
+
 func TestJobSubmitAndComplete(t *testing.T) {
 	s := newTestServer(t)
 	fileID, presetID := seedFileAndPreset(t, s)
@@ -297,13 +334,12 @@ func TestJobSubmitAndComplete(t *testing.T) {
 		return []byte("plot complete"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	require.Contains(t, rr.Body.String(), "drawing.svg")
-	jobID := firstJobID(t, rr.Body.String())
+	require.Contains(t, rr.Body.String(), "fine-detail")
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	var gotArgs []string
 	select {
@@ -329,13 +365,12 @@ func TestJobSubmitAppliesPassOverride(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":       {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id":     {strconv.FormatInt(presetID, 10)},
 		"speed_pendown": {"5"},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	select {
 	case gotArgs := <-argsCh:
@@ -362,12 +397,11 @@ func TestJobRetryAfterFailureRunsFresh(t *testing.T) {
 		return []byte("plot complete"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	require.Eventually(t, func() bool {
 		return strings.Contains(jobRow(t, s, jobID), "failed")
@@ -395,12 +429,11 @@ func TestJobFailureDeletesCheckpoint(t *testing.T) {
 		return []byte("device not found"), errors.New("exit status 1")
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	var args []string
 	select {
@@ -426,12 +459,11 @@ func TestJobRetryRejectedWhenNotFailed(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	require.Eventually(t, func() bool {
 		return strings.Contains(jobRow(t, s, jobID), "complete")
@@ -456,11 +488,10 @@ func TestJobSubmitRejectedWhileAlreadyPrinting(t *testing.T) {
 	}
 
 	form := url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", form)
+	rr := submitJob(t, s, fileID, form)
 	require.Equal(t, http.StatusOK, rr.Code)
 
 	select {
@@ -469,7 +500,7 @@ func TestJobSubmitRejectedWhileAlreadyPrinting(t *testing.T) {
 		t.Fatal("axicli was not invoked")
 	}
 
-	rr = doForm(t, s, http.MethodPost, "/jobs", form)
+	rr = submitJob(t, s, fileID, form)
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Contains(t, rr.Body.String(), "already printing")
 
@@ -483,24 +514,21 @@ func TestJobSubmitRejectedWhileAlreadyPrinting(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "the rejected submission must not have created a second job")
 }
 
-func TestJobSubmitRejectsUnknownFile(t *testing.T) {
+func TestJobSubmitToUnknownUploadReturnsNotFound(t *testing.T) {
 	s := newTestServer(t)
 	_, presetID := seedFileAndPreset(t, s)
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {"999"},
+	rr := submitJob(t, s, 999, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
-	require.Equal(t, http.StatusOK, rr.Code)
-	require.Contains(t, rr.Body.String(), "file not found")
+	require.Equal(t, http.StatusNotFound, rr.Code)
 }
 
 func TestJobSubmitRejectsUnknownPreset(t *testing.T) {
 	s := newTestServer(t)
 	fileID, _ := seedFileAndPreset(t, s)
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {"999"},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -571,13 +599,12 @@ func TestJobSubmitLayersModeCreatesOnePassPerLayerAndStartsFirst(t *testing.T) {
 		return []byte("layer plotted"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 		"mode":      {"layers"},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	var gotArgs []string
 	select {
@@ -614,13 +641,12 @@ func TestJobLayersModeAdvanceRunsNextLayerThenCompletes(t *testing.T) {
 		return []byte("layer plotted"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 		"mode":      {"layers"},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	select {
 	case <-argsCh:
@@ -663,13 +689,12 @@ func TestJobLayersModeAdvanceRejectedBeforeAwaitingNextPass(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 		"mode":      {"layers"},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	select {
 	case <-started:
@@ -700,13 +725,12 @@ func TestJobLayersModeFailedPassCanBeRetriedThenAdvanced(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 		"mode":      {"layers"},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	require.Eventually(t, func() bool {
 		return strings.Contains(jobRow(t, s, jobID), "failed")
@@ -728,8 +752,7 @@ func TestJobSubmitLayersModeRejectsSVGWithNoNumberedLayers(t *testing.T) {
 	s := newTestServer(t)
 	fileID, presetID := seedFileAndPreset(t, s) // validSVG has no layers at all
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 		"mode":      {"layers"},
 	})
@@ -746,13 +769,12 @@ func TestJobLayersModeHoldsDeviceClaimThroughAwaitingNextPass(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(layeredFileID, 10)},
+	rr := submitJob(t, s, layeredFileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 		"mode":      {"layers"},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 	require.Eventually(t, func() bool {
 		return strings.Contains(jobRow(t, s, jobID), "awaiting-next-pass")
 	}, 2*time.Second, 10*time.Millisecond)
@@ -760,8 +782,7 @@ func TestJobLayersModeHoldsDeviceClaimThroughAwaitingNextPass(t *testing.T) {
 	// A different, unrelated Job must not be able to start on the AxiDraw
 	// while the first Job's artwork is still mounted mid-sequence, waiting
 	// on its own next-layer trigger.
-	rr = doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(wholeFileID, 10)},
+	rr = submitJob(t, s, wholeFileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 		"mode":      {"whole"},
 	})
@@ -778,14 +799,13 @@ func TestJobLayersModeHoldsDeviceClaimThroughAwaitingNextPass(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond)
 
 	// Now that the layered Job is fully done, the device is free again.
-	rr = doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(wholeFileID, 10)},
+	rr = submitJob(t, s, wholeFileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 		"mode":      {"whole"},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.NotContains(t, rr.Body.String(), "already printing")
-	thirdJobID := firstJobID(t, rr.Body.String())
+	thirdJobID := firstPrintJobID(t, rr.Body.String())
 	require.Eventually(t, func() bool {
 		return strings.Contains(jobRow(t, s, thirdJobID), "complete")
 	}, 2*time.Second, 10*time.Millisecond, "must wait for the third job's own background goroutine to finish before the test tears down its FileStore temp dir")
@@ -795,8 +815,7 @@ func TestJobSubmitRejectsInvalidMode(t *testing.T) {
 	s := newTestServer(t)
 	fileID, presetID := seedFileAndPreset(t, s)
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 		"mode":      {"bogus"},
 	})
@@ -861,12 +880,11 @@ func TestJobPauseThenResumeCompletesFromCheckpoint(t *testing.T) {
 		return []byte("plot complete"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	var firstArgs []string
 	select {
@@ -922,12 +940,11 @@ func TestJobCanBePausedAndResumedMoreThanOnce(t *testing.T) {
 		return []byte("plot complete"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	for i := 0; i < 2; i++ {
 		select {
@@ -966,12 +983,11 @@ func TestJobPauseRejectedWhenNotPrinting(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	require.Eventually(t, func() bool {
 		return strings.Contains(jobRow(t, s, jobID), "complete")
@@ -989,12 +1005,11 @@ func TestJobResumeRejectedWhenNotPaused(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	require.Eventually(t, func() bool {
 		return strings.Contains(jobRow(t, s, jobID), "complete")
@@ -1011,12 +1026,11 @@ func TestJobCancelWhileRunningInterruptsAndLandsCancelled(t *testing.T) {
 	fakeRun, argsCh := interruptibleAxicli()
 	s.runAxicli = fakeRun
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	var args []string
 	select {
@@ -1043,13 +1057,12 @@ func TestJobCancelWhileRunningInterruptsAndLandsCancelled(t *testing.T) {
 	s.runAxicli = func(_ context.Context, _ ...string) ([]byte, error) {
 		return []byte("ok"), nil
 	}
-	rr = doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr = submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.NotContains(t, rr.Body.String(), "already printing")
-	newJobID := firstJobID(t, rr.Body.String())
+	newJobID := firstPrintJobID(t, rr.Body.String())
 	require.Eventually(t, func() bool {
 		return strings.Contains(jobRow(t, s, newJobID), "complete")
 	}, 2*time.Second, 10*time.Millisecond)
@@ -1062,12 +1075,11 @@ func TestJobCancelFromPausedLeavesNoCheckpointAndJobCancelled(t *testing.T) {
 	fakeRun, argsCh := interruptibleAxicli()
 	s.runAxicli = fakeRun
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	var args []string
 	select {
@@ -1102,13 +1114,12 @@ func TestJobCancelFromAwaitingNextPassCancelsSynchronously(t *testing.T) {
 		return []byte("layer plotted"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 		"mode":      {"layers"},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	require.Eventually(t, func() bool {
 		return strings.Contains(jobRow(t, s, jobID), "awaiting-next-pass")
@@ -1119,14 +1130,13 @@ func TestJobCancelFromAwaitingNextPassCancelsSynchronously(t *testing.T) {
 	require.Contains(t, jobRow(t, s, jobID), "cancelled")
 
 	// The device must be free again for a new job.
-	rr = doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr = submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 		"mode":      {"whole"},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.NotContains(t, rr.Body.String(), "already printing")
-	newJobID := firstJobID(t, rr.Body.String())
+	newJobID := firstPrintJobID(t, rr.Body.String())
 	require.Eventually(t, func() bool {
 		return strings.Contains(jobRow(t, s, newJobID), "complete")
 	}, 2*time.Second, 10*time.Millisecond)
@@ -1140,12 +1150,11 @@ func TestJobCancelRejectedWhenAlreadyTerminal(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
-	jobID := firstJobID(t, rr.Body.String())
+	jobID := firstPrintJobID(t, rr.Body.String())
 
 	require.Eventually(t, func() bool {
 		return strings.Contains(jobRow(t, s, jobID), "complete")

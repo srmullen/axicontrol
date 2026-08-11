@@ -167,10 +167,12 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeJobUpdateEvent writes evt's Job as a named "job-update" SSE message,
-// its data the Job's freshly rendered row fragment marked hx-swap-oob so the
-// htmx SSE extension swaps it into the jobs table in place, wherever the
-// client currently has it open, without a separate round trip back to the
-// server.
+// its data both the Job's freshly rendered /jobs row fragment and its print
+// page status fragment (see print_job_status), each marked hx-swap-oob with
+// its own distinct id so the htmx SSE extension swaps whichever one a given
+// connected client's DOM actually contains — the /jobs table row, the print
+// page's status card, or (having neither) nothing — without a separate
+// round trip back to the server.
 func (s *Server) writeJobUpdateEvent(w io.Writer, ctx context.Context, evt jobEvent) {
 	row, err := s.loadJobRow(ctx, evt.JobID)
 	if err != nil {
@@ -182,6 +184,10 @@ func (s *Server) writeJobUpdateEvent(w io.Writer, ctx context.Context, evt jobEv
 	var buf bytes.Buffer
 	if err := s.templates.ExecuteTemplate(&buf, "job_row", row); err != nil {
 		s.logger.Error("render sse row failed", "error", err)
+		return
+	}
+	if err := s.templates.ExecuteTemplate(&buf, "print_job_status", row); err != nil {
+		s.logger.Error("render sse print status failed", "error", err)
 		return
 	}
 

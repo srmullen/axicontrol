@@ -37,8 +37,7 @@ func TestDryRunReturnsOutputWithoutClaimingDevice(t *testing.T) {
 	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
 		return []byte("ok"), nil
 	}
-	rr = doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr = submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -141,8 +140,7 @@ func TestDryRunRunsWhileAnotherJobIsPrinting(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)

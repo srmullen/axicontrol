@@ -344,8 +344,7 @@ func TestTestActionsRejectedWhileJobPrinting(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	rr := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	rr := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -394,8 +393,7 @@ func TestTestActionClaimsDeviceSoAJobCannotStartConcurrently(t *testing.T) {
 	// axicli call is still in flight — this is the race runTestAction's
 	// tryClaimDevice/releaseDevice pairing (rather than a bare deviceClaimed
 	// peek) exists to close.
-	jobRR := doForm(t, s, http.MethodPost, "/jobs", url.Values{
-		"file_id":   {strconv.FormatInt(fileID, 10)},
+	jobRR := submitJob(t, s, fileID, url.Values{
 		"preset_id": {strconv.FormatInt(presetID, 10)},
 	})
 	require.Equal(t, http.StatusOK, jobRR.Code)

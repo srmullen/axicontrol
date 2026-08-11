@@ -1,6 +1,6 @@
 {{define "jobs_content"}}
 <h1>Jobs</h1>
-<p>Pick an uploaded SVG and a Preset to print a whole-file plot job.</p>
+<p>History and live status for every submitted print job. To start a new one, open an upload's print page.</p>
 {{template "jobs_section" .}}
 {{end}}
 
@@ -22,9 +22,6 @@
       {{range .Jobs}}{{template "job_row" .}}{{end}}
     </tbody>
   </table>
-
-  <h2>New job</h2>
-  {{template "job_new_form" .Form}}
 </div>
 {{end}}
 
@@ -46,52 +43,4 @@
     {{if or (eq .Status "queued") (eq .Status "printing") (eq .Status "paused") (eq .Status "awaiting-next-pass")}}<button hx-post="/jobs/{{.ID}}/cancel" hx-target="#job-{{.ID}}" hx-swap="outerHTML" hx-confirm="Cancel this job?">Cancel</button>{{end}}
   </td>
 </tr>
-{{end}}
-
-{{define "job_new_form"}}
-<form class="inline" hx-post="/jobs" hx-target="#jobs-section" hx-swap="outerHTML">
-  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
-  <label>File
-    <select name="file_id" required>
-      <option value="">Select a file</option>
-      {{range .Files}}<option value="{{.ID}}">{{.Filename}}</option>{{end}}
-    </select>
-  </label>
-  <label>Preset
-    <select name="preset_id" required>
-      <option value="">Select a preset</option>
-      {{range .Presets}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
-    </select>
-  </label>
-  <label>Mode
-    <select name="mode">
-      <option value="whole">Whole file</option>
-      <option value="layers">Layers (one Pass per numbered layer, printed one at a time)</option>
-    </select>
-  </label>
-  <label>Speed down override <input type="number" name="speed_pendown" placeholder="preset default"></label>
-  <label>Speed up override <input type="number" name="speed_penup" placeholder="preset default"></label>
-  <label>Accel override <input type="number" name="accel" placeholder="preset default"></label>
-  <label>Pen down override <input type="number" name="pen_pos_down" placeholder="preset default"></label>
-  <label>Pen up override <input type="number" name="pen_pos_up" placeholder="preset default"></label>
-  <label>Rate lower override <input type="number" name="pen_rate_lower" placeholder="preset default"></label>
-  <label>Rate raise override <input type="number" name="pen_rate_raise" placeholder="preset default"></label>
-  <label>Delay down override <input type="number" name="pen_delay_down" placeholder="preset default"></label>
-  <label>Delay up override <input type="number" name="pen_delay_up" placeholder="preset default"></label>
-  <label>Const speed override
-    <select name="const_speed">
-      <option value="">preset default</option>
-      <option value="true">on</option>
-      <option value="false">off</option>
-    </select>
-  </label>
-  <button type="submit">Submit job</button>
-  <button type="button" hx-post="/jobs/dry-run" hx-target="#dry-run-result" hx-swap="innerHTML">Dry run (time estimate, no printing)</button>
-</form>
-<div id="dry-run-result"></div>
-{{end}}
-
-{{define "dry_run_result"}}
-{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
-{{if .Output}}<pre>{{.Output}}</pre>{{end}}
 {{end}}

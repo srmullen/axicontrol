@@ -140,6 +140,17 @@ func (v jobRowView) Polling() bool {
 	return v.Status == "queued" || v.Status == "printing"
 }
 
+// InProgress reports whether this Job is still active — the set of
+// statuses a per-upload print page shows inline (ADR-0017), as opposed to a
+// terminal Job (complete/failed/cancelled) that's just history.
+func (v jobRowView) InProgress() bool {
+	switch v.Status {
+	case "queued", "printing", "paused", "awaiting-next-pass":
+		return true
+	}
+	return false
+}
+
 // passSummary is one Pass's state as needed to derive its Job's overall
 // status and to report on whichever Pass is currently active.
 type passSummary struct {
@@ -235,15 +246,8 @@ func activePass(passes []passSummary) passSummary {
 	return passes[len(passes)-1]
 }
 
-type newJobFormView struct {
-	Files   []uploadView
-	Presets []presetView
-	Error   string
-}
-
 type jobsSectionView struct {
 	Jobs []jobRowView
-	Form newJobFormView
 }
 
 // loadJobs loads every Job's row view in exactly two queries total (job
@@ -329,6 +333,51 @@ func (s *Server) loadJobRow(ctx context.Context, id int64) (jobRowView, error) {
 	return buildJobRowView(id, filename, createdAt, passes), nil
 }
 
+// loadLatestJobForFile loads fileID's most recently created Job, if any.
+// It's the only Job that can possibly still be in progress: the
+// device-busy guard (tryClaimDevice) never lets a second Job start against
+// the same file while an earlier one is still active, so an older Job for
+// the same file is always terminal by the time a newer one exists. Returns
+// ok=false if fileID has no Jobs at all.
+func (s *Server) loadLatestJobForFile(ctx context.Context, fileID int64) (jobRowView, bool, error) {
+	var id int64
+	var filename, createdAt string
+	row := s.db.QueryRowContext(ctx, `SELECT j.id, f.filename, j.created_at
+		FROM jobs j JOIN files f ON f.id = j.file_id
+		WHERE j.file_id = ? ORDER BY j.created_at DESC, j.id DESC LIMIT 1`, fileID)
+	if err := row.Scan(&id, &filename, &createdAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return jobRowView{}, false, nil
+		}
+		return jobRowView{}, false, err
+	}
+
+	passes, err := s.loadPassSummariesForJob(ctx, id)
+	if err != nil {
+		return jobRowView{}, false, err
+	}
+	if len(passes) == 0 {
+		return jobRowView{}, false, nil
+	}
+
+	return buildJobRowView(id, filename, createdAt, passes), true, nil
+}
+
+// loadInProgressJobForFile loads fileID's currently in-progress Job (see
+// jobRowView.InProgress), for a per-upload print page to show inline
+// (ADR-0017). Returns a nil pointer, not an error, when fileID has no Job
+// or its latest Job has already reached a terminal state.
+func (s *Server) loadInProgressJobForFile(ctx context.Context, fileID int64) (*jobRowView, error) {
+	row, ok, err := s.loadLatestJobForFile(ctx, fileID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || !row.InProgress() {
+		return nil, nil
+	}
+	return &row, nil
+}
+
 // loadJobRowOrNotFound loads a job row by id, writing the appropriate error
 // response itself (404 or 500) and returning ok=false when there's nothing
 // for the caller to render.
@@ -377,24 +426,16 @@ func (s *Server) loadActivePassForJobOrNotFound(w http.ResponseWriter, r *http.R
 	return activePass(passes), deriveJobStatus(passes), true
 }
 
-func (s *Server) loadJobsSectionView(r *http.Request, formErr string) (jobsSectionView, error) {
+func (s *Server) loadJobsSectionView(r *http.Request) (jobsSectionView, error) {
 	jobs, err := s.loadJobs(r.Context())
 	if err != nil {
 		return jobsSectionView{}, err
 	}
-	files, err := s.loadUploads(r)
-	if err != nil {
-		return jobsSectionView{}, err
-	}
-	presets, err := s.loadPresets(r)
-	if err != nil {
-		return jobsSectionView{}, err
-	}
-	return jobsSectionView{Jobs: jobs, Form: newJobFormView{Files: files, Presets: presets, Error: formErr}}, nil
+	return jobsSectionView{Jobs: jobs}, nil
 }
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
-	view, err := s.loadJobsSectionView(r, "")
+	view, err := s.loadJobsSectionView(r)
 	if err != nil {
 		s.logger.Error("list jobs failed", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -403,99 +444,57 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	s.renderPage(w, "jobs_content", view)
 }
 
-// rerenderJobsSection re-loads the job list and renders it plus the new-job
-// form (with formErr, if any) as the #jobs-section fragment.
-func (s *Server) rerenderJobsSection(w http.ResponseWriter, r *http.Request, status int, formErr string) {
-	view, err := s.loadJobsSectionView(r, formErr)
-	if err != nil {
-		s.logger.Error("list jobs failed", "error", err)
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.renderFragment(w, status, "jobs_section", view)
-}
-
-func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	fileID, err := strconv.ParseInt(r.FormValue("file_id"), 10, 64)
-	if err != nil {
-		s.rerenderJobsSection(w, r, http.StatusOK, "select a file")
-		return
-	}
-	presetID, err := strconv.ParseInt(r.FormValue("preset_id"), 10, 64)
-	if err != nil {
-		s.rerenderJobsSection(w, r, http.StatusOK, "select a preset")
-		return
-	}
-
-	mode := r.FormValue("mode")
+// createJobForFile validates and creates a Job for fileID (an Upload's
+// file id) and Presets it against presetID, starting its first Pass in the
+// background on success. Shared by the print page's job-creation endpoint
+// (ADR-0017); exactly one of its three return values is meaningful: a
+// successfully started firstPassID, a user-facing validation message (e.g.
+// "no numbered layers found") the caller should show inline instead of
+// creating anything, or a genuine error the caller should treat as a 500.
+func (s *Server) createJobForFile(ctx context.Context, fileID, presetID int64, mode string, ov overrides) (firstPassID int64, userErr string, err error) {
 	if mode == "" {
 		mode = "whole"
 	}
 	if mode != "whole" && mode != "layers" {
-		s.rerenderJobsSection(w, r, http.StatusOK, "invalid mode")
-		return
+		return 0, "invalid mode", nil
 	}
 
-	ov, err := parseOverridesForm(r)
-	if err != nil {
-		s.rerenderJobsSection(w, r, http.StatusOK, err.Error())
-		return
-	}
-
-	_, storageKey, err := s.loadFileRecord(r.Context(), fileID)
+	_, storageKey, err := s.loadFileRecord(ctx, fileID)
 	if errors.Is(err, sql.ErrNoRows) {
-		s.rerenderJobsSection(w, r, http.StatusOK, "selected file not found")
-		return
+		return 0, "selected file not found", nil
 	} else if err != nil {
-		s.logger.Error("load file for job failed", "error", err)
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return 0, "", err
 	}
 
-	if _, err := s.loadPreset(r.Context(), presetID); errors.Is(err, sql.ErrNoRows) {
-		s.rerenderJobsSection(w, r, http.StatusOK, "selected preset not found")
-		return
+	if _, err := s.loadPreset(ctx, presetID); errors.Is(err, sql.ErrNoRows) {
+		return 0, "selected preset not found", nil
 	} else if err != nil {
-		s.logger.Error("load preset for job failed", "error", err)
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return 0, "", err
 	}
 
 	var layerNumbers []int
 	if mode == "layers" {
-		layerNumbers, err = s.discoverLayersForFile(r.Context(), storageKey)
+		layerNumbers, err = s.discoverLayersForFile(ctx, storageKey)
 		if err != nil {
-			s.logger.Error("discover layers failed", "error", err)
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+			return 0, "", err
 		}
 		if len(layerNumbers) == 0 {
-			s.rerenderJobsSection(w, r, http.StatusOK, "no numbered layers found in this SVG")
-			return
+			return 0, "no numbered layers found in this SVG", nil
 		}
 	}
 
 	if !s.tryClaimDevice() {
-		s.rerenderJobsSection(w, r, http.StatusOK, deviceBusyMessage)
-		return
+		return 0, deviceBusyMessage, nil
 	}
 
-	firstPassID, err := s.insertJobAndPasses(r.Context(), fileID, presetID, mode, layerNumbers, ov)
+	firstPassID, err = s.insertJobAndPasses(ctx, fileID, presetID, mode, layerNumbers, ov)
 	if err != nil {
 		s.releaseDevice(true)
-		s.logger.Error("create job failed", "error", err)
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return 0, "", err
 	}
 
 	go s.executePass(firstPassID)
-
-	s.rerenderJobsSection(w, r, http.StatusOK, "")
+	return firstPassID, "", nil
 }
 
 // discoverLayersForFile reads storageKey's sanitized SVG content and returns
@@ -641,8 +640,8 @@ func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
 
 // handleAdvanceJob starts a layers-mode Job's next Pass. Valid only from
 // awaiting-next-pass — a Pass completing never auto-starts the next one
-// (ADR-0002): this is the explicit user trigger that does. Unlike
-// handleCreateJob/handleRetryJob, this doesn't reclaim the device: it stays
+// (ADR-0002): this is the explicit user trigger that does. Unlike Job
+// creation/handleRetryJob, this doesn't reclaim the device: it stays
 // claimed by this Job across the awaiting-next-pass gap (see
 // Server.releaseDevice) precisely so an unrelated Job can't interleave a
 // Pass on the same still-mounted artwork between layers.
