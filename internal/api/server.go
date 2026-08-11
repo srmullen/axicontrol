@@ -144,7 +144,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "/device-config", http.StatusFound)
+	http.Redirect(w, r, "/uploads", http.StatusFound)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

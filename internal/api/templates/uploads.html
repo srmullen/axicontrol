@@ -22,10 +22,14 @@
     </tbody>
   </table>
 
-  <form class="inline" hx-post="/uploads" hx-target="#uploads-section" hx-swap="outerHTML" hx-encoding="multipart/form-data">
-    <label>SVG file <input type="file" name="file" accept=".svg,image/svg+xml" required></label>
-    <button type="submit">Upload</button>
-  </form>
+  <div id="upload-dropzone" class="dropzone">
+    <p id="upload-dropzone-error" class="error"></p>
+    <form class="inline" hx-post="/uploads" hx-target="#uploads-section" hx-swap="outerHTML" hx-encoding="multipart/form-data">
+      <label>SVG file <input type="file" name="file" accept=".svg,image/svg+xml" required></label>
+      <button type="submit">Upload</button>
+    </form>
+    <p class="dropzone-hint">or drag and drop a single SVG file here</p>
+  </div>
 </div>
 {{end}}
 

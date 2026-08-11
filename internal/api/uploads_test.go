@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -49,6 +50,38 @@ func doMultipartUpload(t *testing.T, s *Server, filename string, content []byte)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	s.ServeHTTP(rr, req)
 	return rr
+}
+
+func TestIndexRedirectsToUploads(t *testing.T) {
+	s := newTestServer(t)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	s.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusFound, rr.Code)
+	require.Equal(t, "/uploads", rr.Header().Get("Location"))
+}
+
+func TestUploadsSectionHasDropzoneWrappingForm(t *testing.T) {
+	s := newTestServer(t)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/uploads", nil)
+	s.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+
+	dropzoneStart := strings.Index(body, `id="upload-dropzone"`)
+	formStart := strings.Index(body, `hx-post="/uploads"`)
+	fileInput := strings.Index(body, `type="file"`)
+	dropzoneEnd := strings.LastIndex(body, "</div>")
+
+	require.NotEqual(t, -1, dropzoneStart, "expected an upload-dropzone element")
+	require.Greater(t, formStart, dropzoneStart, "expected the upload form after the dropzone opening tag")
+	require.Greater(t, fileInput, formStart, "expected the file input inside the form")
+	require.Greater(t, dropzoneEnd, fileInput, "expected the file input inside the dropzone")
 }
 
 func TestUploadsListEmpty(t *testing.T) {

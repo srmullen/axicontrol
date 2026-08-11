@@ -64,3 +64,20 @@ button {
   max-width: 100%;
   border: 1px solid #ddd;
 }
+
+.dropzone {
+  border: 2px dashed #ddd;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.dropzone-hint {
+  margin: 0.5rem 0 0;
+  color: #666;
+  font-size: 0.85rem;
+}
+
+#upload-dropzone-error:empty {
+  display: none;
+}
