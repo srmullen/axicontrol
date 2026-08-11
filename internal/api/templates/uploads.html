@@ -2,7 +2,6 @@
 <h1>Upload Library</h1>
 <p>Sanitized SVGs you've uploaded. Any of them can be the source file for a future plot job.</p>
 {{template "uploads_section" .}}
-<div id="upload-preview"></div>
 {{end}}
 
 {{define "uploads_section"}}
@@ -35,17 +34,11 @@
 
 {{define "upload_row"}}
 <tr id="upload-{{.ID}}">
-  <td>{{.Filename}}</td>
+  <td><a href="/uploads/{{.ID}}/print">{{.Filename}}</a></td>
   <td>{{.SizeBytes}} bytes</td>
   <td>{{.CreatedAt}}</td>
   <td>
-    <button hx-get="/uploads/{{.ID}}" hx-target="#upload-preview" hx-swap="innerHTML">Preview</button>
     <button hx-delete="/uploads/{{.ID}}" hx-target="#upload-{{.ID}}" hx-swap="outerHTML" hx-confirm="Delete &quot;{{.Filename}}&quot;?">Delete</button>
   </td>
 </tr>
-{{end}}
-
-{{define "upload_preview"}}
-<h2>{{.Filename}}</h2>
-<img src="/uploads/{{.ID}}/content" alt="{{.Filename}}" class="upload-preview-image">
 {{end}}

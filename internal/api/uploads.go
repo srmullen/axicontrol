@@ -124,21 +124,6 @@ func uploadIDFromPath(r *http.Request) (int64, error) {
 	return strconv.ParseInt(r.PathValue("id"), 10, 64)
 }
 
-func (s *Server) handleShowUpload(w http.ResponseWriter, r *http.Request) {
-	id, err := uploadIDFromPath(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid upload id")
-		return
-	}
-
-	v, ok := s.loadUploadOrNotFound(w, r, id)
-	if !ok {
-		return
-	}
-
-	s.renderFragment(w, http.StatusOK, "upload_preview", v)
-}
-
 // loadUploadOrNotFound loads an upload by id, writing the appropriate error
 // response itself (404 or 500) and returning ok=false when there's nothing
 // for the caller to render.

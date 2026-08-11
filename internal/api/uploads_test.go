@@ -140,7 +140,7 @@ func TestUploadContentIsSanitized(t *testing.T) {
 	require.Contains(t, rr.Body.String(), `width="10"`)
 }
 
-func TestUploadPreviewRendersImgTag(t *testing.T) {
+func TestUploadRowLinksToPrintPageNotInlinePreview(t *testing.T) {
 	s := newTestServer(t)
 
 	rr := doMultipartUpload(t, s, "drawing.svg", []byte(validSVG))
@@ -148,15 +148,14 @@ func TestUploadPreviewRendersImgTag(t *testing.T) {
 	id := firstUploadID(t, rr.Body.String())
 
 	rr = httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/uploads/"+itoa(id), nil)
+	req := httptest.NewRequest(http.MethodGet, "/uploads", nil)
 	s.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 
 	body := rr.Body.String()
-	require.Contains(t, body, "<img")
-	require.Contains(t, body, "/uploads/"+itoa(id)+"/content")
-	require.NotContains(t, body, "<object")
-	require.NotContains(t, body, "<iframe")
+	require.Contains(t, body, `href="/uploads/`+itoa(id)+`/print"`)
+	require.NotContains(t, body, `hx-get="/uploads/`+itoa(id)+`"`, "the inline Preview button should be gone")
+	require.NotContains(t, body, `id="upload-preview"`, "the inline preview panel should be gone")
 }
 
 func TestUploadDelete(t *testing.T) {

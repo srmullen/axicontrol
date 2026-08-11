@@ -105,7 +105,7 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("GET /uploads", s.handleListUploads)
 	s.mux.HandleFunc("POST /uploads", s.handleCreateUpload)
-	s.mux.HandleFunc("GET /uploads/{id}", s.handleShowUpload)
+	s.mux.HandleFunc("GET /uploads/{id}/print", s.handleUploadPrintPage)
 	s.mux.HandleFunc("GET /uploads/{id}/content", s.handleUploadContent)
 	s.mux.HandleFunc("DELETE /uploads/{id}", s.handleDeleteUpload)
 
