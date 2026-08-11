@@ -31,6 +31,10 @@ docker login ghcr.io -u <github-username>
 
 Essentially all of the cli should be exposed for use somehow. 
 
-## Open questions
+## TODO
 
-- What features can be built on top of it for improved day to day operations of the axidraw?
+- The main page of the application should be the uploads page.
+- Drag and drop upload should be supported.
+- Should be able to click on the upload and be taken to the page to preview and print it.
+- On the print page you should be able to plot either the whole document, or an individual layer. The way plotting layers works right now is confusing and not clear.
+- Should be able to preview what just a layer looks like.
