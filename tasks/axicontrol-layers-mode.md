@@ -1,7 +1,7 @@
 ---
 name: axicontrol-layers-mode
 description: Multi-layer plot jobs with per-layer Passes
-lane: review
+lane: done
 tags: ready-for-agent, user-management
 created-at: "2026-08-03"
 created-by: seanmullen

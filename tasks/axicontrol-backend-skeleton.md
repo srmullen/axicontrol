@@ -1,7 +1,7 @@
 ---
 name: axicontrol-backend-skeleton
 description: Device-pinned backend skeleton deployable to k8s with embedded SQLite
-lane: review
+lane: done
 tags: ready-for-agent, user-management
 created-at: "2026-08-03"
 created-by: seanmullen

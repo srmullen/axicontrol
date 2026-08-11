@@ -1,7 +1,7 @@
 ---
 name: axicontrol-pause-resume
 description: Pause and resume a running plot via checkpoint files
-lane: review
+lane: done
 tags: ready-for-agent, user-management
 created-at: "2026-08-03"
 created-by: seanmullen

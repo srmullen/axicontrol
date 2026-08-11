@@ -1,7 +1,7 @@
 ---
 name: axicontrol-motor-power-controls
 description: Expose disable_xy/enable_xy manual commands in the jog panel, with motor-state guarding
-lane: review
+lane: done
 tags: ready-for-agent
 created-at: "2026-08-10"
 created-by: seanmullen

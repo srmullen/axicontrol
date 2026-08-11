@@ -1,7 +1,7 @@
 ---
 name: axicontrol-arm64-image-build
 description: Build multi-arch (amd64+arm64) container images so the app can deploy to the Raspberry Pi node without an exec format error
-lane: review
+lane: done
 tags: ready-for-agent
 created-at: "2026-08-08"
 created-by: seanmullen

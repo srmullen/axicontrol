@@ -1,7 +1,7 @@
 ---
 name: axicontrol-split-ci-release-workflow
 description: Split GitHub Actions CI into a test/lint/build workflow on push-to-main and a release-published publish workflow to GHCR
-lane: review
+lane: done
 tags: ready-for-agent
 created-at: "2026-08-07"
 created-by: seanmullen

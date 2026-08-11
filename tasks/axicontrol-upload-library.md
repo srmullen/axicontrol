@@ -1,7 +1,7 @@
 ---
 name: axicontrol-upload-library
 description: Upload, sanitize, store, and safely preview SVG files
-lane: review
+lane: done
 tags: ready-for-agent, user-management
 created-at: "2026-08-03"
 created-by: seanmullen
