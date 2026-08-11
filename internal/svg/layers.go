@@ -36,15 +36,11 @@ type Layer struct {
 // number (e.g. "5-red" and "5-outlines") and plot together in a single
 // axicli invocation; an SVG with no numbered layers returns an empty slice.
 func DiscoverLayers(data []byte) ([]Layer, error) {
-	doc := etree.NewDocument()
-	if err := doc.ReadFromBytes(data); err != nil {
-		return nil, fmt.Errorf("parse svg: %w", err)
+	doc, err := parseSVGDocument(data)
+	if err != nil {
+		return nil, err
 	}
-
 	root := doc.Root()
-	if root == nil || !strings.EqualFold(root.Tag, "svg") {
-		return nil, ErrNotSVG
-	}
 
 	byNumber := map[int]*Layer{}
 	var order []int
@@ -80,13 +76,74 @@ func Numbers(layers []Layer) []int {
 
 func collectLayers(e *etree.Element, byNumber map[int]*Layer, order *[]int) {
 	for _, child := range e.ChildElements() {
-		if strings.EqualFold(child.Tag, "g") && child.SelectAttrValue("inkscape:groupmode", "") == "layer" {
+		if isLayerGroup(child) {
 			label := child.SelectAttrValue("inkscape:label", "")
 			if n, ok := parseLeadingLayerNumber(label); ok {
 				addLayerLabel(byNumber, order, n, label)
 			}
 		}
 		collectLayers(child, byNumber, order)
+	}
+}
+
+func isLayerGroup(e *etree.Element) bool {
+	return strings.EqualFold(e.Tag, "g") && e.SelectAttrValue("inkscape:groupmode", "") == "layer"
+}
+
+// IsolateLayer parses data and returns a re-serialized copy with every
+// Inkscape layer group removed except the one(s) whose parsed leading
+// number equals number (see DiscoverLayers — multiple groups can share one
+// number and are all kept together). Non-layer content (defs, root
+// attributes, ungrouped geometry) is left untouched, so the isolated
+// document still renders at the same size. A layer group nested inside a
+// kept layer is itself still just "another layer group" and is stripped if
+// its own number doesn't match — sublayers don't inherit their parent's
+// fate. A number with no matching layer strips everything, returning a
+// valid but empty document rather than erroring, since the caller is
+// expected to have already validated number against DiscoverLayers.
+func IsolateLayer(data []byte, number int) ([]byte, error) {
+	doc, err := parseSVGDocument(data)
+	if err != nil {
+		return nil, err
+	}
+
+	stripOtherLayers(doc.Root(), number)
+
+	out, err := doc.WriteToBytes()
+	if err != nil {
+		return nil, fmt.Errorf("serialize svg: %w", err)
+	}
+	return out, nil
+}
+
+// parseSVGDocument parses data as XML and validates its root is an <svg>
+// element, the identical preamble DiscoverLayers and IsolateLayer both need
+// — the former only ever reads from the result, the latter also needs the
+// *etree.Document itself back (via Root()) to re-serialize after mutating.
+func parseSVGDocument(data []byte) (*etree.Document, error) {
+	doc := etree.NewDocument()
+	if err := doc.ReadFromBytes(data); err != nil {
+		return nil, fmt.Errorf("parse svg: %w", err)
+	}
+
+	root := doc.Root()
+	if root == nil || !strings.EqualFold(root.Tag, "svg") {
+		return nil, ErrNotSVG
+	}
+	return doc, nil
+}
+
+func stripOtherLayers(e *etree.Element, number int) {
+	for _, child := range e.ChildElements() {
+		if isLayerGroup(child) {
+			label := child.SelectAttrValue("inkscape:label", "")
+			n, ok := parseLeadingLayerNumber(label)
+			if !ok || n != number {
+				e.RemoveChild(child)
+				continue
+			}
+		}
+		stripOtherLayers(child, number)
 	}
 }
 

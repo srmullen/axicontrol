@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -186,6 +187,68 @@ func (s *Server) handleUploadContent(w http.ResponseWriter, r *http.Request) {
 	// content runs in the browser's strictest built-in security context.
 	w.Header().Set("Content-Type", "image/svg+xml")
 	_, _ = io.Copy(w, rc)
+}
+
+// handleUploadLayerContent serves an isolated single-Layer SVG document
+// (see svg.IsolateLayer) — the print page's Single Layer mode preview
+// (ADR-0017), via <img> only, same as handleUploadContent's whole-document
+// preview. 404s when number isn't among the Upload's own discovered Layers,
+// rather than silently returning an emptied-out document.
+func (s *Server) handleUploadLayerContent(w http.ResponseWriter, r *http.Request) {
+	id, err := uploadIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid upload id")
+		return
+	}
+
+	number, err := strconv.Atoi(r.PathValue("number"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid layer number")
+		return
+	}
+
+	key, ok := s.loadStorageKeyOrNotFound(w, r, id)
+	if !ok {
+		return
+	}
+
+	layers, err := s.discoverLayersForFile(r.Context(), key)
+	if err != nil {
+		s.logger.Error("discover layers failed", "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !slices.Contains(svg.Numbers(layers), number) {
+		writeError(w, http.StatusNotFound, "layer not found")
+		return
+	}
+
+	rc, err := s.files.Get(key)
+	if err != nil {
+		s.logger.Error("read stored file failed", "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer func() { _ = rc.Close() }()
+
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		s.logger.Error("read stored file failed", "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	isolated, err := svg.IsolateLayer(data, number)
+	if err != nil {
+		s.logger.Error("isolate layer failed", "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Served only via <img> (never inline, <object>, or <iframe>), same as
+	// handleUploadContent — the strictest built-in browser security context.
+	w.Header().Set("Content-Type", "image/svg+xml")
+	_, _ = w.Write(isolated)
 }
 
 func (s *Server) handleDeleteUpload(w http.ResponseWriter, r *http.Request) {

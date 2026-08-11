@@ -1,6 +1,6 @@
 {{define "print_content"}}
 <h1>{{.Upload.Filename}}</h1>
-<img src="/uploads/{{.Upload.ID}}/content" alt="{{.Upload.Filename}}" class="upload-preview-image">
+{{template "print_preview" .}}
 {{if .Layers}}
 <h2>Layers</h2>
 <ul>
@@ -8,6 +8,29 @@
 </ul>
 {{end}}
 {{template "print_section" .}}
+{{end}}
+
+{{define "print_preview"}}
+<div id="print-preview">
+  <img src="{{.PreviewSrc}}" alt="{{.Upload.Filename}}" class="upload-preview-image">
+  {{if .Layers}}
+  <label>Plot mode
+    <select name="mode" hx-get="/uploads/{{.Upload.ID}}/preview" hx-target="#print-preview" hx-swap="outerHTML" hx-trigger="change" hx-include="#print-preview">
+      <option value="whole" {{if eq .Mode "whole"}}selected{{end}}>Whole file</option>
+      <option value="layers" {{if eq .Mode "layers"}}selected{{end}}>Layers (one Pass per numbered layer, printed one at a time)</option>
+      <option value="single_layer" {{if eq .Mode "single_layer"}}selected{{end}}>Single Layer</option>
+    </select>
+  </label>
+  {{if eq .Mode "single_layer"}}
+  <label>Layer
+    <select name="layer_number" hx-get="/uploads/{{.Upload.ID}}/preview" hx-target="#print-preview" hx-swap="outerHTML" hx-trigger="change" hx-include="#print-preview">
+      <option value="">Select a layer</option>
+      {{range .Layers}}<option value="{{.Number}}" {{if $.LayerSelected .Number}}selected{{end}}>{{.Number}}{{if .Labels}} — {{.Labels}}{{end}}</option>{{end}}
+    </select>
+  </label>
+  {{end}}
+  {{end}}
+</div>
 {{end}}
 
 {{define "print_section"}}
@@ -18,7 +41,7 @@
 
   <h2>Print</h2>
   {{if .FormError}}<p class="error">{{.FormError}}</p>{{end}}
-  <form class="inline" hx-post="/uploads/{{.Upload.ID}}/jobs" hx-target="#print-section" hx-swap="outerHTML">
+  <form class="inline" hx-post="/uploads/{{.Upload.ID}}/jobs" hx-target="#print-section" hx-swap="outerHTML" hx-include="#print-preview">
     <input type="hidden" name="file_id" value="{{.Upload.ID}}">
     <label>Preset
       <select name="preset_id" required>
@@ -26,14 +49,6 @@
         {{range .Presets}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
       </select>
     </label>
-    {{if .Layers}}
-    <label>Mode
-      <select name="mode">
-        <option value="whole">Whole file</option>
-        <option value="layers">Layers (one Pass per numbered layer, printed one at a time)</option>
-      </select>
-    </label>
-    {{end}}
     <label>Speed down override <input type="number" name="speed_pendown" placeholder="preset default"></label>
     <label>Speed up override <input type="number" name="speed_penup" placeholder="preset default"></label>
     <label>Accel override <input type="number" name="accel" placeholder="preset default"></label>

@@ -15,6 +15,7 @@ import (
 
 	"github.com/srmullen/axicontrol/internal/filestore"
 	"github.com/srmullen/axicontrol/internal/store"
+	"github.com/srmullen/axicontrol/internal/svg"
 )
 
 const validSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>`
@@ -138,6 +139,53 @@ func TestUploadContentIsSanitized(t *testing.T) {
 	require.NotContains(t, rr.Body.String(), "<script")
 	require.NotContains(t, rr.Body.String(), "onload")
 	require.Contains(t, rr.Body.String(), `width="10"`)
+}
+
+func TestUploadLayerContentServesOnlyTheChosenLayer(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedLayeredFileAndPreset(t, s) // layeredSVG: "1 black", "2 red"
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/uploads/"+itoa(fileID)+"/layers/2/content", nil)
+	s.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "image/svg+xml", rr.Header().Get("Content-Type"))
+	layers, err := svg.DiscoverLayers(rr.Body.Bytes())
+	require.NoError(t, err)
+	require.Equal(t, []int{2}, svg.Numbers(layers), "only the requested layer's group should remain")
+}
+
+func TestUploadLayerContentUnknownLayerReturnsNotFound(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedLayeredFileAndPreset(t, s)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/uploads/"+itoa(fileID)+"/layers/99/content", nil)
+	s.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+func TestUploadLayerContentMissingUploadReturnsNotFound(t *testing.T) {
+	s := newTestServer(t)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/uploads/999/layers/1/content", nil)
+	s.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+func TestUploadLayerContentInvalidLayerNumberReturnsBadRequest(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedLayeredFileAndPreset(t, s)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/uploads/"+itoa(fileID)+"/layers/not-a-number/content", nil)
+	s.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 func TestUploadRowLinksToPrintPageNotInlinePreview(t *testing.T) {

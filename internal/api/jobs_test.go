@@ -760,6 +760,71 @@ func TestJobSubmitLayersModeRejectsSVGWithNoNumberedLayers(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "no numbered layers")
 }
 
+func TestJobSubmitSingleLayerModeCreatesOnePassForChosenLayerOnly(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedLayeredFileAndPreset(t, s) // layers 1 and 2
+
+	argsCh := make(chan []string, 2)
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
+		argsCh <- args
+		return []byte("layer plotted"), nil
+	}
+
+	rr := submitJob(t, s, fileID, url.Values{
+		"preset_id":    {strconv.FormatInt(presetID, 10)},
+		"mode":         {"single_layer"},
+		"layer_number": {"2"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID := firstPrintJobID(t, rr.Body.String())
+
+	var gotArgs []string
+	select {
+	case gotArgs = <-argsCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("axicli was not invoked")
+	}
+	require.Contains(t, gotArgs, "layers")
+	require.Contains(t, gotArgs, "--layer")
+	require.Contains(t, gotArgs, "2")
+
+	require.Eventually(t, func() bool {
+		body := jobRow(t, s, jobID)
+		return strings.Contains(body, "complete") && strings.Contains(body, "1/1")
+	}, 2*time.Second, 10*time.Millisecond, "a Single Layer Job has exactly one Pass and must reach complete on its own")
+
+	select {
+	case <-argsCh:
+		t.Fatal("axicli must not be invoked again: no other layer is touched")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestJobSubmitSingleLayerModeRejectsMissingLayerNumber(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedLayeredFileAndPreset(t, s)
+
+	rr := submitJob(t, s, fileID, url.Values{
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+		"mode":      {"single_layer"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "select a layer")
+}
+
+func TestJobSubmitSingleLayerModeRejectsUnknownLayerNumber(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedLayeredFileAndPreset(t, s)
+
+	rr := submitJob(t, s, fileID, url.Values{
+		"preset_id":    {strconv.FormatInt(presetID, 10)},
+		"mode":         {"single_layer"},
+		"layer_number": {"99"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "layer not found")
+}
+
 func TestJobLayersModeHoldsDeviceClaimThroughAwaitingNextPass(t *testing.T) {
 	s := newTestServer(t)
 	layeredFileID, presetID := seedLayeredFileAndPreset(t, s)

@@ -79,6 +79,105 @@ func TestPrintPageModeSelectorPresentWithDiscoveredLayers(t *testing.T) {
 	require.Contains(t, body, "Layers (one Pass")
 }
 
+func TestPrintPageModeSelectorIncludesSingleLayerOptionWhenLayersExist(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedLayeredFileAndPreset(t, s)
+
+	body := printPage(t, s, fileID).Body.String()
+
+	require.Contains(t, body, `value="single_layer"`)
+	require.Contains(t, body, "Single Layer")
+}
+
+func TestPrintPageJobFormIncludesLivePreviewFieldsInSubmission(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedLayeredFileAndPreset(t, s)
+
+	body := printPage(t, s, fileID).Body.String()
+
+	require.Contains(t, body, `hx-include="#print-preview"`, "the job form must pull mode/layer_number in from the live-preview area, which sits outside the <form>")
+}
+
+func TestUploadPreviewFragmentDefaultsToWholeFileImage(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedLayeredFileAndPreset(t, s)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/uploads/"+itoa(fileID)+"/preview", nil)
+	s.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "/uploads/"+itoa(fileID)+"/content")
+}
+
+func TestUploadPreviewFragmentSwitchesToChosenLayerImage(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedLayeredFileAndPreset(t, s)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/uploads/"+itoa(fileID)+"/preview?mode=single_layer&layer_number=2", nil)
+	s.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, "/uploads/"+itoa(fileID)+"/layers/2/content")
+	require.NotContains(t, body, `src="/uploads/`+itoa(fileID)+`/content"`)
+}
+
+func TestUploadPreviewFragmentMalformedLayerNumberReturnsBadRequest(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedLayeredFileAndPreset(t, s)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/uploads/"+itoa(fileID)+"/preview?mode=single_layer&layer_number=not-a-number", nil)
+	s.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), "layer number must be an integer")
+}
+
+func TestUploadPreviewFragmentSingleLayerModeShowsLayerDropdown(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedLayeredFileAndPreset(t, s) // layers 1 (black), 2 (red)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/uploads/"+itoa(fileID)+"/preview?mode=single_layer", nil)
+	s.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, `name="layer_number"`)
+	require.Contains(t, body, "1 — black")
+	require.Contains(t, body, "2 — red")
+	require.Contains(t, body, "/uploads/"+itoa(fileID)+"/content", "no layer chosen yet, so the whole-file image is still shown")
+}
+
+func TestUploadPreviewFragmentIgnoresALayerNumberNotBelongingToTheUpload(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedLayeredFileAndPreset(t, s) // layers 1 and 2 only
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/uploads/"+itoa(fileID)+"/preview?mode=single_layer&layer_number=99", nil)
+	s.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.NotContains(t, body, "/layers/99/content", "a layer number the upload doesn't have must not be built into an <img src>")
+	require.Contains(t, body, `src="/uploads/`+itoa(fileID)+`/content"`, "falls back to the whole-file image instead")
+}
+
+func TestUploadPreviewFragmentWholeModeHidesLayerDropdown(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedLayeredFileAndPreset(t, s)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/uploads/"+itoa(fileID)+"/preview?mode=whole", nil)
+	s.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NotContains(t, rr.Body.String(), `name="layer_number"`)
+}
+
 func TestPrintPageListsLayersByNumberAndLabel(t *testing.T) {
 	s := newTestServer(t)
 	fileID, _ := seedLayeredFileAndPreset(t, s) // layeredSVG: "1 black", "2 red"

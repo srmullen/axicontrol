@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 
 	"github.com/srmullen/axicontrol/internal/svg"
@@ -451,11 +452,14 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 // successfully started firstPassID, a user-facing validation message (e.g.
 // "no numbered layers found") the caller should show inline instead of
 // creating anything, or a genuine error the caller should treat as a 500.
-func (s *Server) createJobForFile(ctx context.Context, fileID, presetID int64, mode string, ov overrides) (firstPassID int64, userErr string, err error) {
+// singleLayer is only consulted when mode is "single_layer" — the one Layer
+// number the resulting Job's lone Pass plots, distinct from "layers" mode's
+// one-Pass-per-discovered-Layer sequencing (CONTEXT.md's Plot Mode entry).
+func (s *Server) createJobForFile(ctx context.Context, fileID, presetID int64, mode string, singleLayer *int, ov overrides) (firstPassID int64, userErr string, err error) {
 	if mode == "" {
 		mode = "whole"
 	}
-	if mode != "whole" && mode != "layers" {
+	if mode != "whole" && mode != "layers" && mode != "single_layer" {
 		return 0, "invalid mode", nil
 	}
 
@@ -473,7 +477,8 @@ func (s *Server) createJobForFile(ctx context.Context, fileID, presetID int64, m
 	}
 
 	var layerNumbers []int
-	if mode == "layers" {
+	switch mode {
+	case "layers":
 		layers, err := s.discoverLayersForFile(ctx, storageKey)
 		if err != nil {
 			return 0, "", err
@@ -482,6 +487,18 @@ func (s *Server) createJobForFile(ctx context.Context, fileID, presetID int64, m
 			return 0, "no numbered layers found in this SVG", nil
 		}
 		layerNumbers = svg.Numbers(layers)
+	case "single_layer":
+		if singleLayer == nil {
+			return 0, "select a layer", nil
+		}
+		layers, err := s.discoverLayersForFile(ctx, storageKey)
+		if err != nil {
+			return 0, "", err
+		}
+		if !slices.Contains(svg.Numbers(layers), *singleLayer) {
+			return 0, "layer not found", nil
+		}
+		layerNumbers = []int{*singleLayer}
 	}
 
 	if !s.tryClaimDevice() {
@@ -517,11 +534,12 @@ func (s *Server) discoverLayersForFile(ctx context.Context, storageKey string) (
 	return svg.DiscoverLayers(data)
 }
 
-// passLayerNumbersFor returns one *int per Pass to insert for a Job of the
-// given mode, in order: nil for whole mode's single unnumbered Pass, or one
-// pointer per discovered layer number for layers mode.
-func passLayerNumbersFor(mode string, layerNumbers []int) []*int {
-	if mode != "layers" {
+// passLayerNumbersFor returns one *int per Pass to insert, in order: nil for
+// whole mode's single unnumbered Pass (layerNumbers empty), or one pointer
+// per entry in layerNumbers otherwise — one per discovered layer for layers
+// mode, or the single chosen layer for single_layer mode.
+func passLayerNumbersFor(layerNumbers []int) []*int {
+	if len(layerNumbers) == 0 {
 		return []*int{nil}
 	}
 	numbers := make([]*int, len(layerNumbers))
@@ -560,7 +578,7 @@ func (s *Server) insertJobAndPasses(ctx context.Context, fileID, presetID int64,
 	}
 
 	var firstPassID int64
-	for i, layerNumber := range passLayerNumbersFor(mode, layerNumbers) {
+	for i, layerNumber := range passLayerNumbersFor(layerNumbers) {
 		res, err = tx.ExecContext(ctx, `INSERT INTO passes (job_id, sequence_index, preset_id, overrides, status, layer_number)
 			VALUES (?, ?, ?, ?, 'pending', ?)`, jobID, i, presetID, string(overridesJSON), layerNumber)
 		if err != nil {
