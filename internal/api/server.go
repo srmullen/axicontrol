@@ -107,6 +107,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /uploads", s.handleCreateUpload)
 	s.mux.HandleFunc("GET /uploads/{id}/print", s.handleUploadPrintPage)
 	s.mux.HandleFunc("GET /uploads/{id}/preview", s.handleUploadPreview)
+	s.mux.HandleFunc("GET /uploads/{id}/busy-status", s.handleUploadBusyStatus)
 	s.mux.HandleFunc("POST /uploads/{id}/jobs", s.handleCreateJobForUpload)
 	s.mux.HandleFunc("GET /uploads/{id}/content", s.handleUploadContent)
 	s.mux.HandleFunc("GET /uploads/{id}/layers/{number}/content", s.handleUploadLayerContent)

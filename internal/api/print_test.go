@@ -374,3 +374,136 @@ func TestPrintPageSubmitRejectedWhileDeviceBusyWithAnotherUpload(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Contains(t, rr.Body.String(), "already printing")
 }
+
+// startBusyJob submits a Job against busyFileID whose axicli invocation
+// blocks on release, leaving it "printing" (and the device claimed) until
+// the caller closes release, for tests that need another Upload's print
+// page to observe the device as busy.
+func startBusyJob(t *testing.T, s *Server, busyFileID, presetID int64) (release chan struct{}) {
+	t.Helper()
+	started := make(chan struct{})
+	release = make(chan struct{})
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
+		close(started)
+		<-release
+		return []byte("ok"), nil
+	}
+
+	rr := submitJob(t, s, busyFileID, url.Values{"preset_id": {strconv.FormatInt(presetID, 10)}})
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("axicli was not invoked")
+	}
+	return release
+}
+
+func busyStatus(t *testing.T, s *Server, uploadID int64) *httptest.ResponseRecorder {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/uploads/"+itoa(uploadID)+"/busy-status", nil)
+	s.ServeHTTP(rr, req)
+	return rr
+}
+
+func TestPrintPageShowsBusyBannerForAnotherUploadsRunningJob(t *testing.T) {
+	s := newTestServer(t)
+	busyFileID, presetID := seedFileAndPreset(t, s) // "drawing.svg"
+	release := startBusyJob(t, s, busyFileID, presetID)
+	defer close(release)
+
+	rr := doMultipartUpload(t, s, "other.svg", []byte(validSVG))
+	require.Equal(t, http.StatusOK, rr.Code)
+	otherID := firstUploadID(t, rr.Body.String())
+
+	body := printPage(t, s, otherID).Body.String()
+	require.Contains(t, body, "AxiDraw is busy")
+	require.Contains(t, body, "drawing.svg", "the busy banner must name which Upload's Job the device is running")
+	require.Contains(t, body, "Pass 1/1")
+}
+
+func TestPrintPageOwnInProgressJobDoesNotAlsoShowBusyBanner(t *testing.T) {
+	s := newTestServer(t)
+	busyFileID, presetID := seedFileAndPreset(t, s)
+	release := startBusyJob(t, s, busyFileID, presetID)
+	defer close(release)
+
+	body := printPage(t, s, busyFileID).Body.String()
+	require.Contains(t, body, "print-job-", "the owning page still shows its own in-progress Job inline")
+	require.NotContains(t, body, "AxiDraw is busy", "a print page must not tell its own Upload's owner the device is busy with itself")
+}
+
+func TestPrintPageNoBusyBannerWhenDeviceIsFree(t *testing.T) {
+	s := newTestServer(t)
+	fileID, _ := seedFileAndPreset(t, s)
+
+	body := printPage(t, s, fileID).Body.String()
+	require.NotContains(t, body, "AxiDraw is busy")
+	require.NotContains(t, body, "busy-status", "a print page with nothing to watch must not poll forever")
+}
+
+func TestPrintPageBusyBannerPollsForLiveUpdatesWhileTheDeviceIsBusy(t *testing.T) {
+	s := newTestServer(t)
+	busyFileID, presetID := seedFileAndPreset(t, s)
+	release := startBusyJob(t, s, busyFileID, presetID)
+	defer close(release)
+
+	rr := doMultipartUpload(t, s, "other.svg", []byte(validSVG))
+	require.Equal(t, http.StatusOK, rr.Code)
+	otherID := firstUploadID(t, rr.Body.String())
+
+	body := printPage(t, s, otherID).Body.String()
+	require.Contains(t, body, `id="device-busy-banner"`)
+	require.Contains(t, body, `hx-get="/uploads/`+itoa(otherID)+`/busy-status"`)
+	require.Contains(t, body, `hx-trigger="every 2s"`)
+}
+
+func TestBusyStatusFragmentShowsBusyJobForADifferentUpload(t *testing.T) {
+	s := newTestServer(t)
+	busyFileID, presetID := seedFileAndPreset(t, s)
+	release := startBusyJob(t, s, busyFileID, presetID)
+	defer close(release)
+
+	rr := doMultipartUpload(t, s, "other.svg", []byte(validSVG))
+	require.Equal(t, http.StatusOK, rr.Code)
+	otherID := firstUploadID(t, rr.Body.String())
+
+	body := busyStatus(t, s, otherID).Body.String()
+	require.Contains(t, body, "AxiDraw is busy")
+	require.Contains(t, body, "drawing.svg")
+}
+
+func TestBusyStatusFragmentClearsOnceTheRunningJobFinishes(t *testing.T) {
+	s := newTestServer(t)
+	busyFileID, presetID := seedFileAndPreset(t, s)
+	release := startBusyJob(t, s, busyFileID, presetID)
+
+	rr := doMultipartUpload(t, s, "other.svg", []byte(validSVG))
+	require.Equal(t, http.StatusOK, rr.Code)
+	otherID := firstUploadID(t, rr.Body.String())
+
+	require.Contains(t, busyStatus(t, s, otherID).Body.String(), "AxiDraw is busy")
+
+	close(release)
+	require.Eventually(t, func() bool {
+		return !strings.Contains(busyStatus(t, s, otherID).Body.String(), "AxiDraw is busy")
+	}, 2*time.Second, 10*time.Millisecond, "the busy banner must clear once the running Job finishes, without a reload")
+}
+
+func TestBusyStatusFragmentExcludesOwnUpload(t *testing.T) {
+	s := newTestServer(t)
+	busyFileID, presetID := seedFileAndPreset(t, s)
+	release := startBusyJob(t, s, busyFileID, presetID)
+	defer close(release)
+
+	require.NotContains(t, busyStatus(t, s, busyFileID).Body.String(), "AxiDraw is busy")
+}
+
+func TestBusyStatusFragmentMissingUploadReturnsNotFound(t *testing.T) {
+	s := newTestServer(t)
+
+	rr := busyStatus(t, s, 999)
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}

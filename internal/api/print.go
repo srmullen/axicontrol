@@ -15,8 +15,11 @@ import (
 // itself, its discovered Layers (read-only display, axicontrol-layer-labels
 // — an empty slice also gates the mode selector's own visibility), the
 // Presets available to submit a Job against it, its currently in-progress
-// Job if any, an inline validation error from the last submission attempt,
-// and the live-preview area's own selection state (Mode/LayerNumber — see
+// Job if any, the AxiDraw's device-busy Job if it's a *different* Upload's
+// (axicontrol-device-busy-visibility — nil both when the device is free and
+// when the busy Job is this page's own, already covered by Job above), an
+// inline validation error from the last submission attempt, and the
+// live-preview area's own selection state (Mode/LayerNumber — see
 // print_preview) — zero-valued ("whole file", no layer chosen) on a fresh
 // page load, populated from the request on the preview fragment's own
 // reload (handleUploadPreview).
@@ -25,6 +28,7 @@ type printPageView struct {
 	Layers      []layerView
 	Presets     []presetView
 	Job         *jobRowView
+	BusyJob     *jobRowView
 	FormError   string
 	Mode        string
 	LayerNumber *int
@@ -101,7 +105,9 @@ func (s *Server) handleUploadPrintPage(w http.ResponseWriter, r *http.Request) {
 
 // loadPrintPageView assembles upload's print page view: its available
 // Presets, whether its SVG has any discovered Layers (svg.DiscoverLayers),
-// and its currently in-progress Job, if any (see loadInProgressJobForFile).
+// its currently in-progress Job if any (see loadInProgressJobForFile), and
+// the device-busy Job belonging to a different Upload, if any (see
+// loadBusyJobExcluding, axicontrol-device-busy-visibility).
 func (s *Server) loadPrintPageView(r *http.Request, upload uploadView, formErr string) (printPageView, error) {
 	_, storageKey, err := s.loadFileRecord(r.Context(), upload.ID)
 	if err != nil {
@@ -123,11 +129,17 @@ func (s *Server) loadPrintPageView(r *http.Request, upload uploadView, formErr s
 		return printPageView{}, err
 	}
 
+	busyJob, err := s.loadBusyJobExcluding(r.Context(), upload.ID)
+	if err != nil {
+		return printPageView{}, err
+	}
+
 	return printPageView{
 		Upload:    upload,
 		Layers:    buildLayerViews(layers),
 		Presets:   presets,
 		Job:       job,
+		BusyJob:   busyJob,
 		FormError: formErr,
 	}, nil
 }
@@ -279,4 +291,32 @@ func (s *Server) handleShowJobPrintStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.renderFragment(w, http.StatusOK, "print_job_status", v)
+}
+
+// handleUploadBusyStatus renders upload's device-busy banner fragment (see
+// print_device_busy), the poll target that fragment's own hx-trigger hits —
+// it re-derives the AxiDraw's device-busy Job on every poll so the banner
+// picks up a newly started Job elsewhere, updates as that Job progresses,
+// and clears once it finishes, all without the viewer reloading
+// (axicontrol-device-busy-visibility).
+func (s *Server) handleUploadBusyStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := uploadIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid upload id")
+		return
+	}
+
+	upload, ok := s.loadUploadOrNotFound(w, r, id)
+	if !ok {
+		return
+	}
+
+	busyJob, err := s.loadBusyJobExcluding(r.Context(), upload.ID)
+	if err != nil {
+		s.logger.Error("load busy job failed", "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.renderFragment(w, http.StatusOK, "print_device_busy", printPageView{Upload: upload, BusyJob: busyJob})
 }

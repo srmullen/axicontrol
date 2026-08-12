@@ -121,6 +121,7 @@ func parseOverridesForm(r *http.Request) (overrides, error) {
 // derived from its Passes' statuses (ADR-0002), not tracked independently.
 type jobRowView struct {
 	ID         int64
+	FileID     int64
 	Filename   string
 	PresetName string
 	Status     string
@@ -255,7 +256,7 @@ type jobsSectionView struct {
 // cores, then all Passes grouped by job_id — see loadAllPassSummariesByJob),
 // rather than one round trip per Job.
 func (s *Server) loadJobs(ctx context.Context) ([]jobRowView, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT j.id, f.filename, j.created_at
+	rows, err := s.db.QueryContext(ctx, `SELECT j.id, j.file_id, f.filename, j.created_at
 		FROM jobs j JOIN files f ON f.id = j.file_id
 		ORDER BY j.created_at DESC, j.id DESC`)
 	if err != nil {
@@ -265,13 +266,14 @@ func (s *Server) loadJobs(ctx context.Context) ([]jobRowView, error) {
 
 	type jobCore struct {
 		id        int64
+		fileID    int64
 		filename  string
 		createdAt string
 	}
 	var cores []jobCore
 	for rows.Next() {
 		var c jobCore
-		if err := rows.Scan(&c.id, &c.filename, &c.createdAt); err != nil {
+		if err := rows.Scan(&c.id, &c.fileID, &c.filename, &c.createdAt); err != nil {
 			return nil, err
 		}
 		cores = append(cores, c)
@@ -291,7 +293,7 @@ func (s *Server) loadJobs(ctx context.Context) ([]jobRowView, error) {
 		if len(passes) == 0 {
 			continue // shouldn't happen: every Job has at least one Pass
 		}
-		jobs = append(jobs, buildJobRowView(c.id, c.filename, c.createdAt, passes))
+		jobs = append(jobs, buildJobRowView(c.id, c.fileID, c.filename, c.createdAt, passes))
 	}
 	return jobs, nil
 }
@@ -299,10 +301,11 @@ func (s *Server) loadJobs(ctx context.Context) ([]jobRowView, error) {
 // buildJobRowView assembles a Job's row view from its file info and its
 // Passes' derived status, output, and progress (see deriveJobStatus,
 // activePass). passes must be non-empty and ordered by sequence_index.
-func buildJobRowView(id int64, filename, createdAt string, passes []passSummary) jobRowView {
+func buildJobRowView(id, fileID int64, filename, createdAt string, passes []passSummary) jobRowView {
 	active := activePass(passes)
 	return jobRowView{
 		ID:         id,
+		FileID:     fileID,
 		Filename:   filename,
 		CreatedAt:  createdAt,
 		PresetName: active.PresetName,
@@ -316,10 +319,11 @@ func buildJobRowView(id int64, filename, createdAt string, passes []passSummary)
 // loadJobRow assembles a single Job's row view. Returns sql.ErrNoRows if id
 // doesn't exist or (should never happen) has no Passes.
 func (s *Server) loadJobRow(ctx context.Context, id int64) (jobRowView, error) {
+	var fileID int64
 	var filename, createdAt string
 	row := s.db.QueryRowContext(ctx,
-		"SELECT f.filename, j.created_at FROM jobs j JOIN files f ON f.id = j.file_id WHERE j.id = ?", id)
-	if err := row.Scan(&filename, &createdAt); err != nil {
+		"SELECT j.file_id, f.filename, j.created_at FROM jobs j JOIN files f ON f.id = j.file_id WHERE j.id = ?", id)
+	if err := row.Scan(&fileID, &filename, &createdAt); err != nil {
 		return jobRowView{}, err
 	}
 
@@ -331,22 +335,20 @@ func (s *Server) loadJobRow(ctx context.Context, id int64) (jobRowView, error) {
 		return jobRowView{}, sql.ErrNoRows
 	}
 
-	return buildJobRowView(id, filename, createdAt, passes), nil
+	return buildJobRowView(id, fileID, filename, createdAt, passes), nil
 }
 
-// loadLatestJobForFile loads fileID's most recently created Job, if any.
-// It's the only Job that can possibly still be in progress: the
-// device-busy guard (tryClaimDevice) never lets a second Job start against
-// the same file while an earlier one is still active, so an older Job for
-// the same file is always terminal by the time a newer one exists. Returns
-// ok=false if fileID has no Jobs at all.
-func (s *Server) loadLatestJobForFile(ctx context.Context, fileID int64) (jobRowView, bool, error) {
-	var id int64
+// loadJobRowByQuery loads a single Job row view via query, which must select
+// (job id, file_id, filename, created_at), in that order, and takes args
+// positionally — the row-assembly shared by loadLatestJobForFile and
+// loadLatestJob, which differ only in which Job that query picks out.
+// Returns ok=false, no error, if query matches no row or that Job
+// (shouldn't happen) has no Passes.
+func (s *Server) loadJobRowByQuery(ctx context.Context, query string, args ...any) (jobRowView, bool, error) {
+	var id, fileID int64
 	var filename, createdAt string
-	row := s.db.QueryRowContext(ctx, `SELECT j.id, f.filename, j.created_at
-		FROM jobs j JOIN files f ON f.id = j.file_id
-		WHERE j.file_id = ? ORDER BY j.created_at DESC, j.id DESC LIMIT 1`, fileID)
-	if err := row.Scan(&id, &filename, &createdAt); err != nil {
+	row := s.db.QueryRowContext(ctx, query, args...)
+	if err := row.Scan(&id, &fileID, &filename, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return jobRowView{}, false, nil
 		}
@@ -361,7 +363,19 @@ func (s *Server) loadLatestJobForFile(ctx context.Context, fileID int64) (jobRow
 		return jobRowView{}, false, nil
 	}
 
-	return buildJobRowView(id, filename, createdAt, passes), true, nil
+	return buildJobRowView(id, fileID, filename, createdAt, passes), true, nil
+}
+
+// loadLatestJobForFile loads fileID's most recently created Job, if any.
+// It's the only Job that can possibly still be in progress: the
+// device-busy guard (tryClaimDevice) never lets a second Job start against
+// the same file while an earlier one is still active, so an older Job for
+// the same file is always terminal by the time a newer one exists. Returns
+// ok=false if fileID has no Jobs at all.
+func (s *Server) loadLatestJobForFile(ctx context.Context, fileID int64) (jobRowView, bool, error) {
+	return s.loadJobRowByQuery(ctx, `SELECT j.id, j.file_id, f.filename, j.created_at
+		FROM jobs j JOIN files f ON f.id = j.file_id
+		WHERE j.file_id = ? ORDER BY j.created_at DESC, j.id DESC LIMIT 1`, fileID)
 }
 
 // loadInProgressJobForFile loads fileID's currently in-progress Job (see
@@ -374,6 +388,34 @@ func (s *Server) loadInProgressJobForFile(ctx context.Context, fileID int64) (*j
 		return nil, err
 	}
 	if !ok || !row.InProgress() {
+		return nil, nil
+	}
+	return &row, nil
+}
+
+// loadLatestJob loads the most recently created Job across every Upload, if
+// any — loadLatestJobForFile without the file_id filter.
+func (s *Server) loadLatestJob(ctx context.Context) (jobRowView, bool, error) {
+	return s.loadJobRowByQuery(ctx, `SELECT j.id, j.file_id, f.filename, j.created_at
+		FROM jobs j JOIN files f ON f.id = j.file_id
+		ORDER BY j.created_at DESC, j.id DESC LIMIT 1`)
+}
+
+// loadBusyJobExcluding reports the Job currently claiming the device
+// (deviceClaimed — see jobs_run.go), if any, unless it belongs to
+// excludeFileID — a print page never needs to be told the device is busy
+// with its own Upload's Job; that's already covered by its own in-progress
+// Job section. Since tryClaimDevice never lets a second Job start while one
+// is already in progress, at most one Job system-wide is ever in progress
+// at a time, and it's always the most recently created one — so the busy
+// Job, if any, is exactly loadLatestJob's result when it's still in
+// progress.
+func (s *Server) loadBusyJobExcluding(ctx context.Context, excludeFileID int64) (*jobRowView, error) {
+	row, ok, err := s.loadLatestJob(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || !row.InProgress() || row.FileID == excludeFileID {
 		return nil, nil
 	}
 	return &row, nil

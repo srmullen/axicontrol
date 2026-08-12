@@ -37,6 +37,8 @@
 <div id="print-section">
   <div hx-ext="sse" sse-connect="/events" sse-swap="job-update" style="display:none"></div>
 
+  {{template "print_device_busy" .}}
+
   {{if .Job}}{{template "print_job_status" .Job}}{{end}}
 
   <h2>Print</h2>
@@ -69,6 +71,14 @@
     <button type="button" hx-post="/jobs/dry-run" hx-target="#dry-run-result" hx-swap="innerHTML">Dry run (time estimate, no printing)</button>
   </form>
   <div id="dry-run-result"></div>
+</div>
+{{end}}
+
+{{define "print_device_busy"}}
+<div id="device-busy-banner"{{if .BusyJob}} hx-get="/uploads/{{.Upload.ID}}/busy-status" hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML"{{end}}>
+  {{if .BusyJob}}
+  <p class="banner busy">AxiDraw is busy: printing {{.BusyJob.Filename}} — Pass {{.BusyJob.PassNumber}}/{{.BusyJob.PassCount}} ({{.BusyJob.Status}})</p>
+  {{end}}
 </div>
 {{end}}
 
