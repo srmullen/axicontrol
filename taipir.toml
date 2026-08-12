@@ -1,4 +1,5 @@
 # Taipir configuration
+title = "axicontrol"
 
 # Directory containing task markdown files (relative to project root)
 tasks_dir = "tasks"
