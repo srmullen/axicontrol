@@ -130,6 +130,15 @@ type jobRowView struct {
 	PassNumber int // 1-indexed position of the active Pass
 	PassCount  int
 
+	// LayerNumber is the active Pass's own layer number (nil for whole-mode
+	// Jobs, whose lone Pass has none). PrevLayerNumber is the immediately
+	// preceding Pass's layer number, nil when the active Pass is the first
+	// (or itself has none) — meaningful only when Status is
+	// "awaiting-next-pass" (axicontrol-layers-pause-ui), the one state where
+	// there both is a previous Pass and the active one hasn't started yet.
+	LayerNumber     *int
+	PrevLayerNumber *int
+
 	// OOB marks this row for an out-of-band swap (see writeJobUpdateEvent):
 	// set only when rendering a row to push over SSE, never for a row
 	// rendered as an HTTP response's own primary content.
@@ -161,9 +170,10 @@ type passSummary struct {
 	Status        string
 	Output        string
 	PresetName    string
+	LayerNumber   *int
 }
 
-const passSummaryQuery = `SELECT p.id, p.sequence_index, p.status, p.output, pr.name
+const passSummaryQuery = `SELECT p.id, p.sequence_index, p.status, p.output, pr.name, p.layer_number
 	FROM passes p JOIN presets pr ON pr.id = p.preset_id
 	WHERE p.job_id = ? ORDER BY p.sequence_index`
 
@@ -177,8 +187,13 @@ func (s *Server) loadPassSummariesForJob(ctx context.Context, jobID int64) ([]pa
 	var passes []passSummary
 	for rows.Next() {
 		var p passSummary
-		if err := rows.Scan(&p.ID, &p.SequenceIndex, &p.Status, &p.Output, &p.PresetName); err != nil {
+		var layerNumber sql.NullInt64
+		if err := rows.Scan(&p.ID, &p.SequenceIndex, &p.Status, &p.Output, &p.PresetName, &layerNumber); err != nil {
 			return nil, err
+		}
+		if layerNumber.Valid {
+			n := int(layerNumber.Int64)
+			p.LayerNumber = &n
 		}
 		passes = append(passes, p)
 	}
@@ -190,7 +205,7 @@ func (s *Server) loadPassSummariesForJob(ctx context.Context, jobID int64) ([]pa
 // counterpart to loadPassSummariesForJob, used by loadJobs to avoid a
 // per-Job round trip.
 func (s *Server) loadAllPassSummariesByJob(ctx context.Context) (map[int64][]passSummary, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT p.job_id, p.id, p.sequence_index, p.status, p.output, pr.name
+	rows, err := s.db.QueryContext(ctx, `SELECT p.job_id, p.id, p.sequence_index, p.status, p.output, pr.name, p.layer_number
 		FROM passes p JOIN presets pr ON pr.id = p.preset_id
 		ORDER BY p.job_id, p.sequence_index`)
 	if err != nil {
@@ -202,8 +217,13 @@ func (s *Server) loadAllPassSummariesByJob(ctx context.Context) (map[int64][]pas
 	for rows.Next() {
 		var jobID int64
 		var p passSummary
-		if err := rows.Scan(&jobID, &p.ID, &p.SequenceIndex, &p.Status, &p.Output, &p.PresetName); err != nil {
+		var layerNumber sql.NullInt64
+		if err := rows.Scan(&jobID, &p.ID, &p.SequenceIndex, &p.Status, &p.Output, &p.PresetName, &layerNumber); err != nil {
 			return nil, err
+		}
+		if layerNumber.Valid {
+			n := int(layerNumber.Int64)
+			p.LayerNumber = &n
 		}
 		byJob[jobID] = append(byJob[jobID], p)
 	}
@@ -303,16 +323,22 @@ func (s *Server) loadJobs(ctx context.Context) ([]jobRowView, error) {
 // activePass). passes must be non-empty and ordered by sequence_index.
 func buildJobRowView(id, fileID int64, filename, createdAt string, passes []passSummary) jobRowView {
 	active := activePass(passes)
+	var prevLayerNumber *int
+	if active.SequenceIndex > 0 {
+		prevLayerNumber = passes[active.SequenceIndex-1].LayerNumber
+	}
 	return jobRowView{
-		ID:         id,
-		FileID:     fileID,
-		Filename:   filename,
-		CreatedAt:  createdAt,
-		PresetName: active.PresetName,
-		Status:     deriveJobStatus(passes),
-		Output:     active.Output,
-		PassNumber: active.SequenceIndex + 1,
-		PassCount:  len(passes),
+		ID:              id,
+		FileID:          fileID,
+		Filename:        filename,
+		CreatedAt:       createdAt,
+		PresetName:      active.PresetName,
+		Status:          deriveJobStatus(passes),
+		Output:          active.Output,
+		PassNumber:      active.SequenceIndex + 1,
+		PassCount:       len(passes),
+		LayerNumber:     active.LayerNumber,
+		PrevLayerNumber: prevLayerNumber,
 	}
 }
 
@@ -727,27 +753,42 @@ func (s *Server) handleAdvanceJob(w http.ResponseWriter, r *http.Request) {
 }
 
 // startPassAndRenderRow launches passID's execution in the background and
-// renders jobID's row fragment for the htmx response that triggered it —
-// the common tail shared by retry, advance, and resume.
+// renders jobID's current state for the htmx response that triggered it
+// (see renderJobActionResult) — the common tail shared by retry, advance,
+// and resume.
 func (s *Server) startPassAndRenderRow(w http.ResponseWriter, r *http.Request, jobID, passID int64) {
 	go s.executePass(passID)
-
-	v, ok := s.loadJobRowOrNotFound(w, r, jobID)
-	if !ok {
-		return
-	}
-	s.renderFragment(w, http.StatusOK, "job_row", v)
+	s.renderJobActionResult(w, r, jobID)
 }
 
-// renderCurrentJobRow re-loads and renders jobID's row fragment as-is,
-// without starting anything — the common tail for pause and the
-// synchronous branch of cancel, which only change state a running Pass's
-// own goroutine (or, for cancel, this handler itself) already wrote.
+// renderCurrentJobRow re-loads and renders jobID's current state (see
+// renderJobActionResult) without starting anything — the common tail for
+// pause and the synchronous branch of cancel, which only change state a
+// running Pass's own goroutine (or, for cancel, this handler itself)
+// already wrote.
 func (s *Server) renderCurrentJobRow(w http.ResponseWriter, r *http.Request, jobID int64) {
+	s.renderJobActionResult(w, r, jobID)
+}
+
+// renderJobActionResult re-loads jobID's row and renders it as whichever
+// fragment its caller actually needs back: /jobs's plain job_row, or (when
+// the action — currently just Advance, axicontrol-layers-pause-ui — was
+// triggered from the print page's own status card) print_job_status. Both
+// pages share these same action endpoints (advance/retry/pause/resume/
+// cancel), and htmx's own HX-Target request header (naming the triggering
+// element's target id) is what tells them apart, mirroring the GET-side
+// split between handleShowJobRow and handleShowJobPrintStatus.
+func (s *Server) renderJobActionResult(w http.ResponseWriter, r *http.Request, jobID int64) {
 	v, ok := s.loadJobRowOrNotFound(w, r, jobID)
 	if !ok {
 		return
 	}
+
+	if r.Header.Get("HX-Target") == printJobTargetID(jobID) {
+		s.renderPrintJobStatus(w, r, v)
+		return
+	}
+
 	s.renderFragment(w, http.StatusOK, "job_row", v)
 }
 

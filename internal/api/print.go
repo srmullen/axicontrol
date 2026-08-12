@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -27,7 +28,7 @@ type printPageView struct {
 	Upload      uploadView
 	Layers      []layerView
 	Presets     []presetView
-	Job         *jobRowView
+	Job         *printJobStatusView
 	BusyJob     *jobRowView
 	FormError   string
 	Mode        string
@@ -75,6 +76,105 @@ func buildLayerViews(layers []svg.Layer) []layerView {
 		views[i] = layerView{Number: l.Number, Labels: strings.Join(stripped, ", ")}
 	}
 	return views
+}
+
+// printJobStatusView is print_job_status's own template data: a Job row,
+// plus — only while a Layers-mode Job is "awaiting-next-pass" — the layer
+// that just finished and the layer about to run next, both resolved to
+// their label text (axicontrol-layers-pause-ui). Kept separate from
+// jobRowView itself so /jobs's plain job_row rendering, and the
+// general-purpose loadJobRow callers, never pay for the layer-label lookup
+// this needs; both fields are nil for every other status.
+type printJobStatusView struct {
+	jobRowView
+	FinishedLayer *layerView
+	NextLayer     *layerView
+}
+
+// Done reports how many Passes have completed so far. PassNumber is the
+// active Pass's own 1-indexed position, so the Passes before it are exactly
+// the ones already complete — axicontrol-layers-pause-ui's "N of M done".
+func (v printJobStatusView) Done() int {
+	return v.PassNumber - 1
+}
+
+// NextLayerPreviewSrc is the upcoming layer's isolated-preview <img> source
+// (svg.IsolateLayer, ADR-0010's <img>-only preview constraint), reusing the
+// endpoint Single Layer mode's own live preview uses. Empty when there's no
+// next layer to preview — the template's own {{if .NextLayer}} guard means
+// this shouldn't be called otherwise, but a nil NextLayer here dereferences
+// nothing rather than panicking, matching PreviewSrc's own defensiveness.
+func (v printJobStatusView) NextLayerPreviewSrc() string {
+	if v.NextLayer == nil {
+		return ""
+	}
+	return fmt.Sprintf("/uploads/%d/layers/%d/content", v.FileID, v.NextLayer.Number)
+}
+
+// buildPrintJobStatusView assembles row's print-page status-card view,
+// resolving the finished/next layer's label text only when row is a
+// Layers-mode Job awaiting its next Pass (axicontrol-layers-pause-ui) — the
+// one status where PrevLayerNumber/LayerNumber (jobs.go) both name an
+// actual layer; every other status leaves FinishedLayer/NextLayer nil.
+func (s *Server) buildPrintJobStatusView(ctx context.Context, row jobRowView) (printJobStatusView, error) {
+	view := printJobStatusView{jobRowView: row}
+	if row.Status != "awaiting-next-pass" {
+		return view, nil
+	}
+
+	_, storageKey, err := s.loadFileRecord(ctx, row.FileID)
+	if err != nil {
+		return printJobStatusView{}, err
+	}
+	layers, err := s.discoverLayersForFile(ctx, storageKey)
+	if err != nil {
+		return printJobStatusView{}, err
+	}
+	views := buildLayerViews(layers)
+	view.FinishedLayer = findLayerViewPtr(views, row.PrevLayerNumber)
+	view.NextLayer = findLayerViewPtr(views, row.LayerNumber)
+	return view, nil
+}
+
+// findLayerViewPtr finds number's entry in views (see buildLayerViews),
+// returning nil if number itself is nil (no layer to look up) or isn't
+// among the Upload's own discovered Layers — the latter shouldn't happen (a
+// Pass's own layer_number always came from DiscoverLayers in the first
+// place), but a caller gets nil rather than a fabricated label either way.
+func findLayerViewPtr(views []layerView, number *int) *layerView {
+	if number == nil {
+		return nil
+	}
+	for _, v := range views {
+		if v.Number == *number {
+			return &v
+		}
+	}
+	return nil
+}
+
+// printJobTargetID is the print page's own status card's DOM id for jobID
+// (see print_job_status's "print-job-{{.ID}}") — the one Go-side place that
+// spells it out, so renderJobActionResult's HX-Target comparison (jobs.go)
+// can't drift from the template's own id without both call sites changing
+// together.
+func printJobTargetID(jobID int64) string {
+	return fmt.Sprintf("print-job-%d", jobID)
+}
+
+// renderPrintJobStatus builds row's print-page status view (see
+// buildPrintJobStatusView) and renders it as the print_job_status fragment,
+// writing a 500 itself if the build fails — the common tail shared by
+// handleShowJobPrintStatus and renderJobActionResult's print-page branch
+// (jobs.go).
+func (s *Server) renderPrintJobStatus(w http.ResponseWriter, r *http.Request, row jobRowView) {
+	view, err := s.buildPrintJobStatusView(r.Context(), row)
+	if err != nil {
+		s.logger.Error("build print job status failed", "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.renderFragment(w, http.StatusOK, "print_job_status", view)
 }
 
 // handleUploadPrintPage renders the page scoped to a single Upload: its
@@ -128,6 +228,14 @@ func (s *Server) loadPrintPageView(r *http.Request, upload uploadView, formErr s
 	if err != nil {
 		return printPageView{}, err
 	}
+	var jobView *printJobStatusView
+	if job != nil {
+		v, err := s.buildPrintJobStatusView(r.Context(), *job)
+		if err != nil {
+			return printPageView{}, err
+		}
+		jobView = &v
+	}
 
 	busyJob, err := s.loadBusyJobExcluding(r.Context(), upload.ID)
 	if err != nil {
@@ -138,7 +246,7 @@ func (s *Server) loadPrintPageView(r *http.Request, upload uploadView, formErr s
 		Upload:    upload,
 		Layers:    buildLayerViews(layers),
 		Presets:   presets,
-		Job:       job,
+		Job:       jobView,
 		BusyJob:   busyJob,
 		FormError: formErr,
 	}, nil
@@ -290,7 +398,7 @@ func (s *Server) handleShowJobPrintStatus(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	s.renderFragment(w, http.StatusOK, "print_job_status", v)
+	s.renderPrintJobStatus(w, r, v)
 }
 
 // handleUploadBusyStatus renders upload's device-busy banner fragment (see

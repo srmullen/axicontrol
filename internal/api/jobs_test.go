@@ -589,6 +589,42 @@ func TestActivePassReturnsLastPassWhenAllComplete(t *testing.T) {
 	require.Equal(t, int64(2), activePass(passes).ID)
 }
 
+func intPtr(n int) *int { return &n }
+
+func TestBuildJobRowViewSetsLayerNumberAndPrevLayerNumberWhenAwaitingNextPass(t *testing.T) {
+	passes := []passSummary{
+		{ID: 1, SequenceIndex: 0, Status: "complete", LayerNumber: intPtr(1)},
+		{ID: 2, SequenceIndex: 1, Status: "pending", LayerNumber: intPtr(2)},
+	}
+	row := buildJobRowView(10, 20, "drawing.svg", "2026-01-01T00:00:00Z", passes)
+
+	require.Equal(t, "awaiting-next-pass", row.Status)
+	require.NotNil(t, row.LayerNumber)
+	require.Equal(t, 2, *row.LayerNumber, "the active (not-yet-run) Pass's own layer number")
+	require.NotNil(t, row.PrevLayerNumber)
+	require.Equal(t, 1, *row.PrevLayerNumber, "the immediately preceding, already-complete Pass's layer number")
+}
+
+func TestBuildJobRowViewLeavesPrevLayerNumberNilForTheFirstPass(t *testing.T) {
+	passes := []passSummary{
+		{ID: 1, SequenceIndex: 0, Status: "pending", LayerNumber: intPtr(1)},
+	}
+	row := buildJobRowView(10, 20, "drawing.svg", "2026-01-01T00:00:00Z", passes)
+
+	require.NotNil(t, row.LayerNumber)
+	require.Nil(t, row.PrevLayerNumber, "there is no preceding Pass to report")
+}
+
+func TestBuildJobRowViewLeavesLayerNumberNilForWholeModeJobs(t *testing.T) {
+	passes := []passSummary{
+		{ID: 1, SequenceIndex: 0, Status: "pending", LayerNumber: nil},
+	}
+	row := buildJobRowView(10, 20, "drawing.svg", "2026-01-01T00:00:00Z", passes)
+
+	require.Nil(t, row.LayerNumber)
+	require.Nil(t, row.PrevLayerNumber)
+}
+
 func TestJobSubmitLayersModeCreatesOnePassPerLayerAndStartsFirst(t *testing.T) {
 	s := newTestServer(t)
 	fileID, presetID := seedLayeredFileAndPreset(t, s)
@@ -711,6 +747,99 @@ func TestJobLayersModeAdvanceRejectedBeforeAwaitingNextPass(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return strings.Contains(jobRow(t, s, jobID), "awaiting-next-pass")
 	}, 2*time.Second, 10*time.Millisecond, "must wait for the background goroutine to finish before the test tears down its FileStore temp dir")
+}
+
+// submitLayersJobAwaitingNextPass submits a layers-mode Job against
+// seedLayeredFileAndPreset's two layers ("1 black", "2 red"), waiting for
+// layer 1 to complete so the Job sits in awaiting-next-pass — the state
+// axicontrol-layers-pause-ui's print-page context is shown in.
+func submitLayersJobAwaitingNextPass(t *testing.T, s *Server, fileID, presetID int64) (jobID int64) {
+	t.Helper()
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
+		return []byte("layer plotted"), nil
+	}
+
+	rr := submitJob(t, s, fileID, url.Values{
+		"preset_id": {strconv.FormatInt(presetID, 10)},
+		"mode":      {"layers"},
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	jobID = firstPrintJobID(t, rr.Body.String())
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(jobRow(t, s, jobID), "awaiting-next-pass")
+	}, 2*time.Second, 10*time.Millisecond)
+	return jobID
+}
+
+func TestPrintPageShowsFinishedAndNextLayerWhileAwaitingNextPass(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedLayeredFileAndPreset(t, s) // layers 1 (black), 2 (red)
+	jobID := submitLayersJobAwaitingNextPass(t, s, fileID, presetID)
+
+	body := printPage(t, s, fileID).Body.String()
+	require.Contains(t, body, "1 of 2 done")
+	require.Contains(t, body, "Finished layer 1")
+	require.Contains(t, body, "black")
+	require.Contains(t, body, "Next: layer 2")
+	require.Contains(t, body, "red")
+	require.Contains(t, body, "/uploads/"+itoa(fileID)+"/layers/2/content", "the next layer's live preview must use the isolated-layer endpoint")
+	require.Contains(t, body, `hx-post="/jobs/`+itoa(jobID)+`/advance"`)
+	require.Contains(t, body, `hx-target="#print-job-`+itoa(jobID)+`"`)
+}
+
+func TestPrintPageShowsBarePassCounterForNonPausedStatuses(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedFileAndPreset(t, s)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	s.runAxicli = func(_ context.Context, args ...string) ([]byte, error) {
+		close(started)
+		<-release
+		return []byte("ok"), nil
+	}
+	defer close(release)
+
+	rr := submitJob(t, s, fileID, url.Values{"preset_id": {strconv.FormatInt(presetID, 10)}})
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("axicli was not invoked")
+	}
+
+	body := printPage(t, s, fileID).Body.String()
+	require.Contains(t, body, "Pass 1/1")
+	require.NotContains(t, body, "of 1 done", "the layers-pause layout is only for awaiting-next-pass")
+}
+
+func TestJobsRowUnaffectedByLayersPauseUI(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedLayeredFileAndPreset(t, s)
+	jobID := submitLayersJobAwaitingNextPass(t, s, fileID, presetID)
+
+	body := jobRow(t, s, jobID)
+	require.Contains(t, body, "2/2", "/jobs keeps its plain Pass N/M display")
+	require.NotContains(t, body, "Finished layer", "/jobs must not gain the print page's layer-label context")
+	require.NotContains(t, body, "black")
+}
+
+func TestAdvanceFromPrintPageRendersPrintJobStatusFragment(t *testing.T) {
+	s := newTestServer(t)
+	fileID, presetID := seedLayeredFileAndPreset(t, s)
+	jobID := submitLayersJobAwaitingNextPass(t, s, fileID, presetID)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/jobs/"+strconv.FormatInt(jobID, 10)+"/advance", nil)
+	req.Header.Set("HX-Target", "print-job-"+strconv.FormatInt(jobID, 10))
+	s.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, `id="print-job-`+strconv.FormatInt(jobID, 10)+`"`)
+	require.NotContains(t, body, `id="job-`+strconv.FormatInt(jobID, 10)+`"`, "a request targeting the print page's own card must not get /jobs's row fragment back")
 }
 
 func TestJobLayersModeFailedPassCanBeRetriedThenAdvanced(t *testing.T) {

@@ -181,12 +181,18 @@ func (s *Server) writeJobUpdateEvent(w io.Writer, ctx context.Context, evt jobEv
 	}
 	row.OOB = true
 
+	statusView, err := s.buildPrintJobStatusView(ctx, row)
+	if err != nil {
+		s.logger.Error("build print job status for sse failed", "job_id", evt.JobID, "error", err)
+		return
+	}
+
 	var buf bytes.Buffer
 	if err := s.templates.ExecuteTemplate(&buf, "job_row", row); err != nil {
 		s.logger.Error("render sse row failed", "error", err)
 		return
 	}
-	if err := s.templates.ExecuteTemplate(&buf, "print_job_status", row); err != nil {
+	if err := s.templates.ExecuteTemplate(&buf, "print_job_status", statusView); err != nil {
 		s.logger.Error("render sse print status failed", "error", err)
 		return
 	}

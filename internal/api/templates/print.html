@@ -86,7 +86,19 @@
 <div id="print-job-{{.ID}}"{{if .OOB}} hx-swap-oob="true"{{end}}{{if .Polling}} hx-get="/jobs/{{.ID}}/print-status" hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML"{{end}}>
   <h2>Current job</h2>
   <p>Preset: {{.PresetName}}</p>
+  {{if eq .Status "awaiting-next-pass"}}
+  <div class="layers-pause">
+    <p>{{.Done}} of {{.PassCount}} done</p>
+    {{if .FinishedLayer}}<p>Finished layer {{.FinishedLayer.Number}}{{if .FinishedLayer.Labels}} — {{.FinishedLayer.Labels}}{{end}}</p>{{end}}
+    {{if .NextLayer}}
+    <p>Next: layer {{.NextLayer.Number}}{{if .NextLayer.Labels}} — {{.NextLayer.Labels}}{{end}}</p>
+    <img src="{{.NextLayerPreviewSrc}}" alt="Layer {{.NextLayer.Number}} preview" class="upload-preview-image">
+    {{end}}
+    <button hx-post="/jobs/{{.ID}}/advance" hx-target="#print-job-{{.ID}}" hx-swap="outerHTML">Advance to next pass</button>
+  </div>
+  {{else}}
   <p>Pass {{.PassNumber}}/{{.PassCount}}</p>
+  {{end}}
   <p>Status: {{.Status}}
     {{if and (eq .Status "failed") .Output}}<details><summary>details</summary><pre>{{.Output}}</pre></details>{{end}}
   </p>
