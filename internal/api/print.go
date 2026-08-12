@@ -13,17 +13,18 @@ import (
 )
 
 // printPageView is the per-upload print page's data (ADR-0017): the Upload
-// itself, its discovered Layers (read-only display, axicontrol-layer-labels
-// — an empty slice also gates the mode selector's own visibility), the
-// Presets available to submit a Job against it, its currently in-progress
-// Job if any, the AxiDraw's device-busy Job if it's a *different* Upload's
-// (axicontrol-device-busy-visibility — nil both when the device is free and
-// when the busy Job is this page's own, already covered by Job above), an
-// inline validation error from the last submission attempt, and the
-// live-preview area's own selection state (Mode/LayerNumber — see
-// print_preview) — zero-valued ("whole file", no layer chosen) on a fresh
-// page load, populated from the request on the preview fragment's own
-// reload (handleUploadPreview).
+// itself, its discovered Layers (svg.DiscoverLayers — gates the mode
+// selector's own visibility, and supplies the Layer <select>'s options and
+// the layers-pause status card's labels; not rendered as a list of its own
+// on the page), the Presets available to submit a Job against it, its
+// currently in-progress Job if any, the AxiDraw's device-busy Job if it's a
+// *different* Upload's (axicontrol-device-busy-visibility — nil both when
+// the device is free and when the busy Job is this page's own, already
+// covered by Job above), an inline validation error from the last
+// submission attempt, and the live-preview area's own selection state
+// (Mode/LayerNumber — see print_preview) — zero-valued ("whole file", no
+// layer chosen) on a fresh page load, populated from the request on the
+// preview fragment's own reload (handleUploadPreview).
 type printPageView struct {
 	Upload      uploadView
 	Layers      []layerView

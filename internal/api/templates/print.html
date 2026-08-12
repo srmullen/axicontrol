@@ -1,12 +1,6 @@
 {{define "print_content"}}
 <h1>{{.Upload.Filename}}</h1>
 {{template "print_preview" .}}
-{{if .Layers}}
-<h2>Layers</h2>
-<ul>
-  {{range .Layers}}<li>{{.Number}}{{if .Labels}} — {{.Labels}}{{end}}</li>{{end}}
-</ul>
-{{end}}
 {{template "print_section" .}}
 {{end}}
 
